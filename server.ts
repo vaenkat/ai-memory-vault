@@ -4,6 +4,8 @@ import fs from "fs";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
+import { initializeApp as initAdminApp, getApps as getAdminApps } from "firebase-admin/app";
+import { getAuth as getAdminAuth } from "firebase-admin/auth";
 
 dotenv.config();
 
@@ -27,6 +29,13 @@ if (!firebaseConfig) {
     appId: process.env.VITE_FIREBASE_APP_ID || process.env.FIREBASE_APP_ID,
   };
 }
+
+// Initialize Firebase Admin SDK for cryptographic token verification
+const adminApp =
+  getAdminApps().length === 0
+    ? initAdminApp({ projectId: firebaseConfig?.projectId })
+    : getAdminApps()[0];
+const adminAuth = getAdminAuth(adminApp);
 
 const PORT = 3000;
 const app = express();
@@ -176,29 +185,60 @@ function isEntryClassifiedPrivate(entry: any): boolean {
 }
 
 /**
- * Safely extracts the authenticated user ID (sub / user_id) from the Firebase ID token payload.
- * This guarantees the server never relies on a client-supplied or unverified userId parameter.
+ * Cryptographically verifies the Firebase ID token in the Authorization header.
+ * Rejects requests with missing, invalid, expired, or untrusted tokens with HTTP 401.
+ * Ensures the authenticated UID is derived solely from the verified token, never from
+ * client-supplied parameters like req.body.userId or x-user-id.
  */
-function extractUidFromIdToken(idToken: string): string | null {
-  if (!idToken || typeof idToken !== "string") return null;
+async function authenticateRequest(
+  req: express.Request,
+  res: express.Response
+): Promise<{ verifiedUid: string; idToken: string } | null> {
+  const authHeader = req.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    res.status(401).json({
+      error: "Authentication required: Missing or malformed Bearer token in Authorization header.",
+    });
+    return null;
+  }
+
+  const idToken = authHeader.slice(7).trim();
+  if (!idToken) {
+    res.status(401).json({
+      error: "Authentication required: Missing Firebase ID token.",
+    });
+    return null;
+  }
+
   try {
-    const parts = idToken.split(".");
-    if (parts.length < 2) return null;
-    const payloadJson = Buffer.from(parts[1], "base64url").toString("utf-8");
-    const payload = JSON.parse(payloadJson);
-    const uid = typeof payload.user_id === "string" ? payload.user_id : typeof payload.sub === "string" ? payload.sub : null;
-    return uid && uid.trim().length > 0 ? uid.trim() : null;
-  } catch {
+    const decoded = await adminAuth.verifyIdToken(idToken);
+    if (!decoded || !decoded.uid) {
+      res.status(401).json({
+        error: "Unauthorized: Invalid authentication token claims.",
+      });
+      return null;
+    }
+
+    return {
+      verifiedUid: decoded.uid.trim(),
+      idToken,
+    };
+  } catch (err: any) {
+    console.warn(`[Auth Verification] ID token verification rejected: ${err?.code || err?.message || err}`);
+    res.status(401).json({
+      error: "Unauthorized: Invalid, expired, or untrusted authentication token.",
+      details: err?.code || "UNAUTHENTICATED",
+    });
     return null;
   }
 }
 
 /**
  * Authoritative Firestore privacy check:
- * Verifies directly with Firestore using the user's Auth ID token.
+ * Verifies directly with Firestore REST API using the user's verified identity and ID token.
  *
  * Authorization Enforcement:
- * 1. Derives the authenticated UID directly from the caller's ID token, ignoring any spoofed client userId.
+ * 1. Uses the verified UID derived solely from the cryptographically verified token.
  * 2. Issues a scoped request to the Firestore REST API with "Authorization: Bearer <idToken>".
  * 3. Firestore evaluates firestore.rules ("request.auth.uid == userId"), enforcing complete tenant isolation.
  *
@@ -207,35 +247,135 @@ function extractUidFromIdToken(idToken: string): string | null {
  * If not found, permission denied, or error, returns null.
  */
 async function checkFirestoreAuthoritativePrivateStatus(
-  userId: string,
+  verifiedUid: string,
   entryId: string,
   idToken: string
 ): Promise<boolean | null> {
-  if (!firebaseConfig || !entryId || !idToken) return null;
+  if (!firebaseConfig?.projectId || !firebaseConfig?.firestoreDatabaseId || !entryId || !idToken || !verifiedUid) {
+    return null;
+  }
   try {
-    // Authoritative identity: extract UID directly from the cryptographically signed token
-    const tokenUid = extractUidFromIdToken(idToken);
-    const effectiveUserId = tokenUid || userId;
-    if (!effectiveUserId) return null;
-
-    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/users/${encodeURIComponent(effectiveUserId)}/entries/${encodeURIComponent(entryId)}`;
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/users/${encodeURIComponent(verifiedUid)}/entries/${encodeURIComponent(entryId)}`;
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${idToken}` },
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      return null;
+    }
     const doc: any = await res.json();
     const fields = doc.fields || {};
-    if (fields.isGeminiPrivate?.booleanValue === true || fields.isPrivate?.booleanValue === true) {
+
+    // 1. Direct boolean flags
+    if (
+      fields.isGeminiPrivate?.booleanValue === true ||
+      fields.isPrivate?.booleanValue === true ||
+      fields.private?.booleanValue === true ||
+      fields.isSecret?.booleanValue === true
+    ) {
       return true;
     }
-    if (fields.isGeminiPrivate?.booleanValue === false && fields.isPrivate?.booleanValue === false) {
+
+    // 2. String representations
+    const strGemini = String(fields.isGeminiPrivate?.stringValue ?? "").toLowerCase().trim();
+    if (strGemini === "true" || strGemini === "1" || strGemini === "yes") return true;
+
+    const strPrivate = String(fields.isPrivate?.stringValue ?? "").toLowerCase().trim();
+    if (strPrivate === "true" || strPrivate === "1" || strPrivate === "yes") return true;
+
+    const strGeneral = String(fields.private?.stringValue ?? "").toLowerCase().trim();
+    if (strGeneral === "true" || strGeneral === "1" || strGeneral === "yes") return true;
+
+    // 3. Numeric representation
+    if (
+      fields.isGeminiPrivate?.integerValue === "1" ||
+      fields.isPrivate?.integerValue === "1" ||
+      fields.private?.integerValue === "1"
+    ) {
+      return true;
+    }
+
+    // 4. Privacy tags in Firestore document
+    if (fields.tags?.arrayValue?.values && Array.isArray(fields.tags.arrayValue.values)) {
+      const hasPrivTag = fields.tags.arrayValue.values.some((v: any) => {
+        const t = String(v.stringValue ?? "").toLowerCase().trim();
+        return t === "private" || t === "secret";
+      });
+      if (hasPrivTag) return true;
+    }
+
+    if (
+      fields.isGeminiPrivate?.booleanValue === false ||
+      fields.isPrivate?.booleanValue === false
+    ) {
       return false;
     }
-    return null;
+
+    return false;
   } catch (err) {
     console.warn(`[Firestore Auth Check] Error checking entry ${entryId}:`, err);
     return null;
   }
+}
+
+/**
+ * Strict Authoritative Memory Filter:
+ * Filters candidate historical memories so that:
+ * 1. Empty or invalid memories are excluded.
+ * 2. The active/current entry is never treated as a historical memory.
+ * 3. Any memory already quarantined is excluded.
+ * 4. Any memory classified as private by the client is excluded immediately.
+ * 5. Any memory marked as private in Firestore is authoritatively excluded
+ *    (client-supplied isGeminiPrivate=false can NEVER override authoritative Firestore state).
+ */
+async function filterEligibleMemoriesAuthoritatively(
+  rawMemories: any[],
+  verifiedUid: string,
+  idToken: string,
+  excludeEntryId?: string | null,
+  quarantinedIds?: Set<string>
+): Promise<any[]> {
+  if (!Array.isArray(rawMemories) || rawMemories.length === 0) {
+    return [];
+  }
+
+  const eligibleMemories: any[] = [];
+
+  for (const m of rawMemories) {
+    if (!m || typeof m !== "object") continue;
+    if (typeof m.content !== "string" || !m.content.trim()) continue;
+
+    // Invariant 1: An active/current entry is NEVER treated as a historical memory
+    if (excludeEntryId && m.id && m.id === excludeEntryId) {
+      continue;
+    }
+
+    // Invariant 2: Quarantined private entry IDs must NEVER enter Gemini context
+    if (m.id && quarantinedIds && quarantinedIds.has(m.id)) {
+      console.log(`[AI Privacy Firewall] Purged quarantined private memory: ID "${m.id}", Title: "${m.title || "Untitled"}"`);
+      continue;
+    }
+
+    // Invariant 3: Explicit client classification check
+    if (isEntryClassifiedPrivate(m)) {
+      if (m.id && quarantinedIds) quarantinedIds.add(m.id);
+      console.log(`[AI Privacy Firewall] Purged client-classified private memory: ID "${m.id || "unknown"}", Title: "${m.title || "Untitled"}"`);
+      continue;
+    }
+
+    // Invariant 4: Authoritative Firestore check (client-supplied isGeminiPrivate=false must NEVER override Firestore state)
+    if (m.id) {
+      const authPrivate = await checkFirestoreAuthoritativePrivateStatus(verifiedUid, m.id, idToken);
+      if (authPrivate === true) {
+        console.log(`[AI Privacy Firewall - Authoritative Firestore Check] Memory "${m.id}" is marked PRIVATE in Firestore! Purging from context.`);
+        if (quarantinedIds) quarantinedIds.add(m.id);
+        continue;
+      }
+    }
+
+    eligibleMemories.push(m);
+  }
+
+  return eligibleMemories;
 }
 
 /**
@@ -245,6 +385,11 @@ async function checkFirestoreAuthoritativePrivateStatus(
  */
 app.post("/api/gemini/chat", async (req, res) => {
   try {
+    // 1. Strict server-side Firebase ID token verification
+    const auth = await authenticateRequest(req, res);
+    if (!auth) return;
+    const { verifiedUid, idToken } = auth;
+
     const data = req.body && typeof req.body === "object" ? req.body : {};
     const { messages, contextScope = "current" } = data;
 
@@ -262,10 +407,6 @@ app.post("/api/gemini/chat", async (req, res) => {
       : [];
 
     const targetActiveEntry = data.activeEntry || data.currentEntry || null;
-    const authHeader = req.headers.authorization || "";
-    const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
-    const tokenUid = extractUidFromIdToken(idToken);
-    const userId = tokenUid || (req.headers["x-user-id"] as string) || (data.userId as string) || "";
 
     // Track quarantined private entry IDs
     const quarantinedIds = new Set<string>();
@@ -280,8 +421,8 @@ app.post("/api/gemini/chat", async (req, res) => {
     if (targetActiveEntry?.id) {
       if (isActivePrivate) {
         quarantinedIds.add(targetActiveEntry.id);
-      } else if (userId && idToken) {
-        const authPrivate = await checkFirestoreAuthoritativePrivateStatus(userId, targetActiveEntry.id, idToken);
+      } else {
+        const authPrivate = await checkFirestoreAuthoritativePrivateStatus(verifiedUid, targetActiveEntry.id, idToken);
         if (authPrivate === true) {
           console.log(`[AI Privacy Firewall - Authoritative Firestore Check] Target active entry "${targetActiveEntry.id}" is marked PRIVATE in Firestore. Overriding to private.`);
           isActivePrivate = true;
@@ -290,42 +431,14 @@ app.post("/api/gemini/chat", async (req, res) => {
       }
     }
 
-    // Strict AI Privacy Firewall: Filter ALL historical/vault memories
-    const eligibleMemories: any[] = [];
-    for (const m of rawMemories) {
-      if (!m || typeof m !== "object") continue;
-
-      // Invariant 1: An active entry is NEVER treated as a past historical memory
-      if (targetActiveEntry?.id && m.id === targetActiveEntry.id) {
-        continue;
-      }
-
-      // Invariant 2: Quarantined private entry IDs must NEVER enter Gemini context
-      if (m.id && quarantinedIds.has(m.id)) {
-        console.log(`[AI Privacy Firewall] Purged quarantined private memory: ID "${m.id}", Title: "${m.title || "Untitled"}"`);
-        continue;
-      }
-
-      // Invariant 3: Explicit client classification check
-      if (isEntryClassifiedPrivate(m)) {
-        console.log(`[AI Privacy Firewall] Purged private memory: ID "${m.id || "unknown"}", Title: "${m.title || "Untitled"}"`);
-        continue;
-      }
-
-      // Invariant 4: Authoritative Firestore check for memory items if client claimed public
-      if (userId && idToken && m.id) {
-        const authPrivate = await checkFirestoreAuthoritativePrivateStatus(userId, m.id, idToken);
-        if (authPrivate === true) {
-          console.log(`[AI Privacy Firewall - Authoritative Firestore Check] Memory "${m.id}" is marked PRIVATE in Firestore! Purging from context.`);
-          quarantinedIds.add(m.id);
-          continue;
-        }
-      }
-
-      if (typeof m.content === "string" && m.content.trim().length > 0) {
-        eligibleMemories.push(m);
-      }
-    }
+    // Strict AI Privacy Firewall: Filter ALL historical/vault memories authoritatively
+    const eligibleMemories = await filterEligibleMemoriesAuthoritatively(
+      rawMemories,
+      verifiedUid,
+      idToken,
+      targetActiveEntry?.id,
+      quarantinedIds
+    );
 
     // Strict AI Privacy Firewall: Filter current activeEntry
     let contextSection = "";
@@ -437,6 +550,11 @@ MANDATORY AI PRIVACY FIREWALL RULES:
  */
 app.post("/api/gemini/reflect", async (req, res) => {
   try {
+    // 1. Strict server-side Firebase ID token verification
+    const auth = await authenticateRequest(req, res);
+    if (!auth) return;
+    const { verifiedUid, idToken } = auth;
+
     const data = req.body && typeof req.body === "object" ? req.body : {};
     const { currentEntry, memories = [], focusArea = "general", contextScope = "current" } = data;
 
@@ -444,16 +562,12 @@ app.post("/api/gemini/reflect", async (req, res) => {
       return res.status(400).json({ error: "Missing or invalid 'currentEntry' with content." });
     }
 
-    const authHeader = req.headers.authorization || "";
-    const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
-    const tokenUid = extractUidFromIdToken(idToken);
-    const userId = tokenUid || (req.headers["x-user-id"] as string) || (data.userId as string) || "";
-
-    // AI Privacy Firewall enforcement
+    // AI Privacy Firewall enforcement on currentEntry
     let isCurrentPrivate = isEntryClassifiedPrivate(currentEntry);
-    if (!isCurrentPrivate && currentEntry?.id && userId && idToken) {
-      const authPrivate = await checkFirestoreAuthoritativePrivateStatus(userId, currentEntry.id, idToken);
+    if (!isCurrentPrivate && currentEntry?.id) {
+      const authPrivate = await checkFirestoreAuthoritativePrivateStatus(verifiedUid, currentEntry.id, idToken);
       if (authPrivate === true) {
+        console.log(`[AI Privacy Firewall - Authoritative Firestore Check] Reflect currentEntry "${currentEntry.id}" is marked PRIVATE in Firestore. Overriding to private.`);
         isCurrentPrivate = true;
       }
     }
@@ -464,9 +578,13 @@ app.post("/api/gemini/reflect", async (req, res) => {
       });
     }
 
-    const eligibleMemories = Array.isArray(memories)
-      ? memories.filter((m) => m && !isEntryClassifiedPrivate(m) && m.id !== currentEntry.id)
-      : [];
+    // Strict AI Privacy Firewall: Authoritatively verify all historical memories against Firestore
+    const eligibleMemories = await filterEligibleMemoriesAuthoritatively(
+      memories,
+      verifiedUid,
+      idToken,
+      currentEntry.id
+    );
 
     let prompt = `Please provide a thoughtful reflection on this journal entry:\n\nTitle: ${currentEntry.title || "Untitled"}\nContent:\n${currentEntry.content}\n\n`;
 
@@ -507,27 +625,20 @@ Please provide:
  */
 app.post("/api/gemini/analyze-themes", async (req, res) => {
   try {
+    // 1. Strict server-side Firebase ID token verification
+    const auth = await authenticateRequest(req, res);
+    if (!auth) return;
+    const { verifiedUid, idToken } = auth;
+
     const data = req.body && typeof req.body === "object" ? req.body : {};
     const { memories = [] } = data;
 
-    const authHeader = req.headers.authorization || "";
-    const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
-    const tokenUid = extractUidFromIdToken(idToken);
-    const userId = tokenUid || (req.headers["x-user-id"] as string) || (data.userId as string) || "";
-
-    // Filter strictly for eligible (non-private) memories
-    const eligibleMemories: any[] = [];
-    if (Array.isArray(memories)) {
-      for (const m of memories) {
-        if (!m || typeof m.content !== "string") continue;
-        if (isEntryClassifiedPrivate(m)) continue;
-        if (userId && idToken && m.id) {
-          const authPrivate = await checkFirestoreAuthoritativePrivateStatus(userId, m.id, idToken);
-          if (authPrivate === true) continue;
-        }
-        eligibleMemories.push(m);
-      }
-    }
+    // Filter strictly for eligible (non-private) memories with authoritative Firestore verification
+    const eligibleMemories = await filterEligibleMemoriesAuthoritatively(
+      memories,
+      verifiedUid,
+      idToken
+    );
 
     if (eligibleMemories.length < 2) {
       return res.json({
