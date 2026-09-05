@@ -1,0 +1,6 @@
+{
+  "name": "Personal Gemini Journal - AI Memory Vault",
+  "description": "A production-grade, user-authenticated personal journaling application with Firebase Authentication, isolated Cloud Firestore, Gemini multi-turn reflection, and private AI memory firewall.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

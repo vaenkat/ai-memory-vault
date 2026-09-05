@@ -1,0 +1,65 @@
+{
+  "entities": {
+    "JournalEntry": {
+      "title": "JournalEntry",
+      "description": "A user-authored private journal entry or reflection in the AI Memory Vault.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 200 },
+        "content": { "type": "string", "maxLength": 50000 },
+        "tags": { "type": "array" },
+        "mood": { "type": "string", "maxLength": 50 },
+        "isGeminiPrivate": { "type": "boolean", "description": "Privacy classification: if true, this entry is NEVER sent to Gemini" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "title", "content", "isGeminiPrivate", "createdAt"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Multi-turn reflection and brainstorming dialogue with Gemini.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "entryId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 200 },
+        "contextScope": { "type": "string", "enum": ["current", "selected", "date_range", "all_vault"] },
+        "includedMemoryIds": { "type": "array" },
+        "messages": { "type": "array" },
+        "summary": { "type": "string", "maxLength": 5000 },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "contextScope", "messages", "createdAt"]
+    },
+    "UserPreference": {
+      "title": "UserPreference",
+      "description": "Security and default AI privacy configurations for the user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "defaultPrivacyFirewall": { "type": "string", "enum": ["current", "selected", "date_range", "all_vault"] },
+        "autoSaveInterval": { "type": "number" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "defaultPrivacyFirewall"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/entries/{entryId}": {
+      "schema": { "$ref": "#/entities/JournalEntry" },
+      "description": "Owner-bound private journal entries with strict privacy flags"
+    },
+    "/users/{userId}/conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "Owner-bound multi-turn AI reflections and chat history"
+    },
+    "/users/{userId}/preferences/{prefId}": {
+      "schema": { "$ref": "#/entities/UserPreference" },
+      "description": "Owner-bound user security preferences and defaults"
+    }
+  }
+}

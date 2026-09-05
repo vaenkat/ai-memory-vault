@@ -1,0 +1,62 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default-deny all queries and documents
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Owner-bound journal entries
+    match /users/{userId}/entries/{entryId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) 
+                    && isValidId(entryId)
+                    && request.resource.data.userId == userId
+                    && request.resource.data.content is string
+                    && request.resource.data.content.size() <= 50000
+                    && request.resource.data.isGeminiPrivate is bool;
+      allow update: if isOwner(userId) 
+                    && isValidId(entryId)
+                    && request.resource.data.userId == userId
+                    && request.resource.data.content is string
+                    && request.resource.data.content.size() <= 50000
+                    && request.resource.data.isGeminiPrivate is bool;
+      allow delete: if isOwner(userId) && isValidId(entryId);
+    }
+
+    // Owner-bound conversations & reflections
+    match /users/{userId}/conversations/{conversationId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) 
+                    && isValidId(conversationId)
+                    && request.resource.data.userId == userId;
+      allow update: if isOwner(userId) 
+                    && isValidId(conversationId)
+                    && request.resource.data.userId == userId;
+      allow delete: if isOwner(userId) && isValidId(conversationId);
+    }
+
+    // Owner-bound preferences & settings
+    match /users/{userId}/preferences/{prefId} {
+      allow read, write: if isOwner(userId) && isValidId(prefId);
+    }
+
+    // Owner-bound interactions (for campaign compliance and telemetry)
+    match /users/{userId}/interactions/{interactionId} {
+      allow read, write: if isOwner(userId) && isValidId(interactionId);
+    }
+  }
+}
