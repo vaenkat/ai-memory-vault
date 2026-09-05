@@ -4,5 +4,30 @@ dist/
 coverage/
 .DS_Store
 *.log
+
+# Environment variables & local configuration
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 .env*
 !.env.example
+
+# Service account credentials, private keys, and secret tokens
+*service-account*.json
+*service_account*.json
+service-account.json
+*credentials*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.cert
+*.crt
+id_rsa
+id_rsa.pub
+
+# Local dev server states
+.dev.env.json
+.dev.pid

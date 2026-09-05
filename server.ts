@@ -17,6 +17,17 @@ try {
   console.warn("Could not load firebase-applet-config.json:", e);
 }
 
+// Fallback to environment variables if config file is missing
+if (!firebaseConfig) {
+  firebaseConfig = {
+    projectId: process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID,
+    firestoreDatabaseId: process.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || process.env.FIRESTORE_DATABASE_ID,
+    apiKey: process.env.VITE_FIREBASE_API_KEY || process.env.FIREBASE_API_KEY,
+    authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN || process.env.FIREBASE_AUTH_DOMAIN,
+    appId: process.env.VITE_FIREBASE_APP_ID || process.env.FIREBASE_APP_ID,
+  };
+}
+
 const PORT = 3000;
 const app = express();
 
