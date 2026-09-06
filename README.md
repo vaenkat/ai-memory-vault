@@ -1,5 +1,3 @@
-Absolutely. Copy-paste this **as your entire `README.md`**:
-
 ````markdown
 # Personal Gemini Journal — AI Memory Vault
 
