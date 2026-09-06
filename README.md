@@ -1,4 +1,3 @@
-````markdown
 # Personal Gemini Journal — AI Memory Vault
 
 A privacy-first personal journaling and reflection application built with **Google Gemini, Firebase Authentication, Cloud Firestore, Google Cloud Secret Manager, and Google Cloud Run**.
