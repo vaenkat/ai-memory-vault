@@ -1,61 +1,110 @@
+Absolutely. Copy-paste this **as your entire `README.md`**:
+
+````markdown
 # Personal Gemini Journal — AI Memory Vault
 
-A secure, user-authenticated personal journaling and reflection application built with Google Gemini, Firebase Authentication, Cloud Firestore, and Google Cloud Secret Manager.
+A privacy-first personal journaling and reflection application built with **Google Gemini, Firebase Authentication, Cloud Firestore, Google Cloud Secret Manager, and Google Cloud Run**.
 
-Built for the **Google Cloud Run AI Challenge**, featuring:
-- **Zero-Trust Architecture**: Federated Google Identity with no passwords stored.
-- **Owner-Bound Database Isolation**: Cloud Firestore with strict security rules enforcing user data isolation.
-- **AI Privacy Firewall**: Dual-layer client and server-side filtering ensuring private entries are never sent to Gemini.
-- **Model Resilience Ladder**: Automated fallback protocol (`gemini-3.6-flash` → `gemini-3.1-flash-lite` → `gemini-flash-latest` → `gemini-3.7-flash`).
-- **Grounded Recurring Life Themes**: Thematic synthesis referencing actual journal entries without clinical or diagnostic claims.
+Built for the **Google Cloud Run AI Challenge**, extending the Personal Gemini Journal baseline with persistent memory, recurring themes, controlled AI access, and a server-enforced Privacy Firewall.
 
----
+## ✨ Key Features
 
-## 1. Prerequisites & Cloud APIs
+- **🔐 Federated Google Authentication** — Google Sign-In through Firebase Authentication with server-side identity verification.
+- **🛡️ Owner-Bound Database Isolation** — Firestore security rules ensure users can only access their own data.
+- **🔒 AI Privacy Firewall** — Entries marked **Keep Private** are never included in Gemini context. This is enforced server-side.
+- **🧠 Persistent Memory Reflection** — Gemini can reflect across eligible historical journal entries.
+- **🔎 Recurring Themes** — Identifies recurring themes across eligible memories with supporting journal entries.
+- **🎯 Controlled Reflection Scope** — Reflect across the entire eligible vault, specific thoughts, a label, or the current thought.
+- **💬 Multi-Turn Reflection** — Gemini conversations are persisted in Firestore.
+- **☁️ Secure Secret Management** — Gemini credentials remain server-side and can be supplied through Google Cloud Secret Manager.
+- **🧪 Security Verification** — Authentication, privacy enforcement, user isolation, persistence, and Gemini access paths are tested.
 
-Ensure the following Google Cloud APIs are enabled in your GCP project:
-
-```bash
-gcloud services enable \
-  run.googleapis.com \
-  secretmanager.googleapis.com \
-  firestore.googleapis.com \
-  identitytoolkit.googleapis.com
-```
+> **Core principle:** Gemini can remember what you choose to share, but it can never access what you mark private.
 
 ---
 
-## 2. Secret Management Setup (Google Cloud Secret Manager)
+## 🏗️ Architecture
 
-To eliminate hardcoded API keys and credentials, store the `GEMINI_API_KEY` in Google Cloud Secret Manager:
-
-```bash
-# 1. Create the secret in Secret Manager
-gcloud secrets create GEMINI_API_KEY --replication-policy="automatic"
-
-# 2. Add your Gemini API key value
-echo -n "YOUR_GEMINI_API_KEY" | gcloud secrets versions add GEMINI_API_KEY --data-file=-
-
-# 3. Grant the default Cloud Run runtime service account permission to read the secret
-PROJECT_NUMBER=$(gcloud projects describe $(gcloud config get-value project) --format="value(projectNumber)")
-
-gcloud secrets add-iam-policy-binding GEMINI_API_KEY \
-  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
-```
+```text
+                         ┌──────────────────────┐
+                         │        User          │
+                         └──────────┬───────────┘
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │    React Frontend    │
+                         │                      │
+                         │ Today / Memories     │
+                         │ Reflect / Privacy    │
+                         └──────────┬───────────┘
+                                    │
+                              Firebase ID Token
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │    Express Backend   │
+                         │                      │
+                         │ Token verification   │
+                         │ Privacy Firewall     │
+                         │ Context filtering    │
+                         │ Gemini proxy         │
+                         └───────┬───────┬──────┘
+                                 │       │
+                    ┌────────────┘       └─────────────┐
+                    ▼                                  ▼
+          ┌──────────────────┐               ┌──────────────────┐
+          │  Cloud Firestore │               │   Google Gemini  │
+          │                  │               │                  │
+          │ User-isolated    │               │ Reflection &     │
+          │ journal data     │               │ theme analysis   │
+          └──────────────────┘               └──────────────────┘
+````
 
 ---
 
-## 3. Cloud Firestore Security Rules
+## 🛠️ Technology Stack
 
-Deploy the owner-bound security rules to ensure strict data isolation where users can only read and write their own documents:
+| Layer                 | Technology                  |
+| --------------------- | --------------------------- |
+| Frontend              | React + TypeScript          |
+| Backend               | Node.js + Express           |
+| Authentication        | Firebase Authentication     |
+| Database              | Cloud Firestore             |
+| AI                    | Google Gemini API           |
+| Server Authentication | Firebase Admin SDK          |
+| Secret Management     | Google Cloud Secret Manager |
+| Development           | Google AI Studio            |
+| Deployment Target     | Google Cloud Run            |
+| Repository            | GitHub                      |
+
+---
+
+# 🔐 Security Architecture
+
+## Authentication
+
+Users authenticate using Google Sign-In through Firebase Authentication.
+
+The backend does not trust a user ID supplied by the client.
+
+The authentication flow is:
+
+1. The client sends a Firebase ID token.
+2. The backend verifies the token using the Firebase Admin SDK.
+3. The verified Firebase `uid` becomes the authoritative identity.
+4. Client-supplied user IDs are not used for authorization.
+
+## Firestore Isolation
+
+User data is stored beneath user-specific Firestore paths.
+
+The security rules enforce ownership using the authenticated Firebase UID:
 
 ```javascript
 rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Default-deny all queries and documents
     match /{document=**} {
       allow read, write: if false;
     }
@@ -69,45 +118,49 @@ service cloud.firestore {
     }
 
     function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      return id is string &&
+             id.size() <= 128 &&
+             id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    // User-isolated Journal Entries
     match /users/{userId}/entries/{entryId} {
       allow read: if isOwner(userId);
-      allow create: if isOwner(userId) 
+
+      allow create: if isOwner(userId)
                     && isValidId(entryId)
                     && request.resource.data.userId == userId
                     && request.resource.data.content is string
                     && request.resource.data.content.size() <= 50000
                     && request.resource.data.isGeminiPrivate is bool;
-      allow update: if isOwner(userId) 
+
+      allow update: if isOwner(userId)
                     && isValidId(entryId)
                     && request.resource.data.userId == userId
                     && request.resource.data.content is string
                     && request.resource.data.content.size() <= 50000
                     && request.resource.data.isGeminiPrivate is bool;
+
       allow delete: if isOwner(userId) && isValidId(entryId);
     }
 
-    // User-isolated Conversations & Reflections
     match /users/{userId}/conversations/{conversationId} {
       allow read: if isOwner(userId);
-      allow create: if isOwner(userId) 
+
+      allow create: if isOwner(userId)
                     && isValidId(conversationId)
                     && request.resource.data.userId == userId;
-      allow update: if isOwner(userId) 
+
+      allow update: if isOwner(userId)
                     && isValidId(conversationId)
                     && request.resource.data.userId == userId;
+
       allow delete: if isOwner(userId) && isValidId(conversationId);
     }
 
-    // User-isolated Preferences & Settings
     match /users/{userId}/preferences/{prefId} {
       allow read, write: if isOwner(userId) && isValidId(prefId);
     }
 
-    // User-isolated Interactions (Compliance & Telemetry)
     match /users/{userId}/interactions/{interactionId} {
       allow read, write: if isOwner(userId) && isValidId(interactionId);
     }
@@ -115,7 +168,7 @@ service cloud.firestore {
 }
 ```
 
-Deploy the rules using the Firebase CLI:
+Deploy the rules:
 
 ```bash
 firebase deploy --only firestore:rules
@@ -123,9 +176,144 @@ firebase deploy --only firestore:rules
 
 ---
 
-## 4. Google Cloud Run Deployment
+## 🔒 AI Privacy Firewall
 
-Deploy the containerized full-stack application to Cloud Run, injecting the `GEMINI_API_KEY` directly from Secret Manager:
+Every journal entry can be classified using:
+
+```text
+isGeminiPrivate: true
+```
+
+When an entry is marked **Keep Private**:
+
+* It remains stored in the user's journal.
+* It is excluded from Gemini context.
+* It is excluded from reflection scopes.
+* It remains excluded even when using **Entire Eligible Vault**.
+* The server verifies the authoritative privacy state before constructing Gemini context.
+
+The client cannot override an entry's authoritative private state.
+
+---
+
+# 🧠 Memory & Reflection
+
+## Reflection Scopes
+
+Users can choose:
+
+* **Entire Eligible Vault** — all non-private memories.
+* **Specific Thoughts** — selected journal entries.
+* **By Label** — memories matching a selected label.
+* **Current Thought Only** — only the current eligible entry.
+
+Private thoughts are automatically excluded from every scope.
+
+## Recurring Themes
+
+The Memory Vault can identify recurring themes across eligible journal entries.
+
+Themes are grounded in the user's stored memories and can reference the supporting entries that contributed to the theme.
+
+This feature is intended for personal reflection and does not provide clinical or diagnostic conclusions.
+
+---
+
+# 🚀 Local Development
+
+## Prerequisites
+
+* Node.js
+* npm
+* Firebase project
+* Firebase Authentication
+* Google Sign-In enabled
+* Cloud Firestore
+* Gemini API access
+* Firebase CLI
+
+## 1. Clone the repository
+
+```bash
+git clone https://github.com/vaenkat/ai-memory-vault.git
+cd ai-memory-vault
+```
+
+## 2. Install dependencies
+
+```bash
+npm install
+```
+
+## 3. Configure environment variables
+
+Create your local environment configuration using `.env.example`.
+
+The Gemini API key must remain server-side.
+
+Never commit:
+
+* `.env`
+* `.env.local`
+* Gemini API keys
+* Firebase Admin credentials
+* service-account JSON files
+
+## 4. Configure Firebase
+
+Enable:
+
+* Firebase Authentication
+* Google Sign-In
+* Cloud Firestore
+
+Add the hostname used by your development environment to Firebase Authentication's authorized domains.
+
+## 5. Start the application
+
+```bash
+npm run dev
+```
+
+---
+
+# ☁️ Google Cloud Run Deployment
+
+The challenge's intended production deployment target is **Google Cloud Run**.
+
+## 1. Enable required APIs
+
+```bash
+gcloud services enable \
+  run.googleapis.com \
+  secretmanager.googleapis.com \
+  firestore.googleapis.com \
+  identitytoolkit.googleapis.com
+```
+
+## 2. Create the Gemini secret
+
+```bash
+gcloud secrets create GEMINI_API_KEY \
+  --replication-policy="automatic"
+```
+
+Add the API key:
+
+```bash
+echo -n "YOUR_GEMINI_API_KEY" | \
+gcloud secrets versions add GEMINI_API_KEY --data-file=-
+```
+
+Grant the Cloud Run runtime service account access:
+
+```bash
+gcloud secrets add-iam-policy-binding GEMINI_API_KEY \
+  --member="serviceAccount:YOUR_SERVICE_ACCOUNT" \
+  --role="roles/secretmanager.secretAccessor"
+```
+
+## 3. Deploy to Cloud Run
 
 ```bash
 gcloud run deploy personal-gemini-journal \
@@ -137,11 +325,17 @@ gcloud run deploy personal-gemini-journal \
   --port 3000
 ```
 
----
+Adjust the region and service account to match your Google Cloud project.
 
-## 5. Mandatory Campaign Verification Binding
+## 4. Apply the challenge verification label
 
-To register the service for automated challenge verification, apply the mandatory resource label:
+The required label is:
+
+```text
+dev-tutorial=cloud-run-ai-challenge
+```
+
+Apply it with:
 
 ```bash
 gcloud run services update personal-gemini-journal \
@@ -149,7 +343,7 @@ gcloud run services update personal-gemini-journal \
   --region asia-east1
 ```
 
-Verify that the label is present:
+Verify:
 
 ```bash
 gcloud run services describe personal-gemini-journal \
@@ -159,48 +353,93 @@ gcloud run services describe personal-gemini-journal \
 
 ---
 
-## 6. Functional Verification Walkthrough
+# 🧪 Verification
 
-Follow these sequential steps to test all features:
+The application was tested against the following scenarios.
 
-### Test Case 1: Federated Google Authentication
-1. Navigate to the application root.
-2. Confirm the unauthenticated landing page displays the zero-trust security overview.
-3. Click **Sign in with Google**.
-4. Complete the popup authorization.
-5. Confirm the UI renders the authenticated navigation bar and your user avatar.
+### Authentication
 
-### Test Case 2: Writing & Privacy Classification in "Today"
-1. In the **Today** view, type a title and journal entry.
-2. Select a mood chip (e.g. *Reflective*).
-3. Toggle the **Mark as 🔒 Private** button.
-4. Verify the banner changes to **"🔒 Private — Gemini will NEVER access this entry"** with the **FIREWALL ACTIVE** badge.
-5. Click **Save Changes**.
-6. Verify the confirmation toast appears and the entry is stored in Firestore under `/users/{userId}/entries/{entryId}`.
+* Google Sign-In
+* Missing authentication token
+* Invalid or tampered token
+* Spoofed client user ID
+* Server-side Firebase identity verification
 
-### Test Case 3: AI Privacy Firewall Enforcement
-1. Attempt to click **Reflect with AI** on the private entry.
-2. Confirm the button is disabled or prevented with the explanation that private entries are barred from Gemini.
-3. Toggle off the private flag and click **Reflect with AI**.
-4. Confirm navigation to the **Reflect** tab with the active context loaded.
+### Privacy Firewall
 
-### Test Case 4: Multi-Turn Conversation & Model Fallback Ladder
-1. In the **Reflect** tab, ask a question (e.g. *"What questions should I explore based on this reflection?"*).
-2. Confirm the Gemini response streams/renders in clean markdown.
-3. Check the model badge (e.g. `gemini-3.6-flash`).
-4. Enter a follow-up message to verify multi-turn context retention.
-5. Check that the conversation is persisted in Firestore under `/users/{userId}/conversations/{conversationId}`.
+* Private entry excluded from Gemini
+* Mixed public/private context
+* Client-side privacy override attempt
+* Public → private state change
+* Private → public state change
+* Authoritative Firestore privacy verification
 
-### Test Case 5: Memory Vault Browsing & Recurring Themes
-1. Switch to the **Memories** tab.
-2. Verify all saved entries are visible.
-3. Use the search bar and filter toggles (*All*, *AI Eligible*, *🔒 Private*).
-4. Click **Discover Recurring Themes**.
-5. Verify the evidence-backed theme cards render (e.g. *"Mentioned in X entries"*).
-6. Click a theme card to filter supporting journal entries.
+### Application Functionality
 
-### Test Case 6: Privacy Center & Data Portability
-1. Switch to the **Privacy** tab.
-2. Verify the 4 architecture cards (Firewall, Firestore Isolation, Federated Identity, Secret Management) show active status.
-3. Click **Export Archive (JSON)** and **Export as Markdown**; verify downloads.
-4. Test the **Wipe All Data** workflow with safety confirmation.
+* Journal creation and persistence
+* Today editor reset after successful save
+* Memory Vault browsing
+* Memory filtering
+* Gemini multi-turn reflection
+* Quick Reflection
+* Reflection scope selection
+* Recurring theme analysis
+* Conversation persistence
+* Export
+* Delete
+
+---
+
+# 📁 Repository Structure
+
+```text
+.
+├── src/
+│   ├── components/
+│   ├── lib/
+│   └── ...
+├── server.ts
+├── firestore.rules
+├── .env.example
+├── package.json
+├── package-lock.json
+└── README.md
+```
+
+---
+
+# 🎯 Challenge Context
+
+This project was created for the **Google Cloud Run AI Challenge** as part of the Google Cloud Gen AI Academy APAC program.
+
+The project started from the Personal Gemini Journal baseline and extends it with:
+
+* Persistent personal memory
+* User-controlled AI access
+* Server-enforced privacy boundaries
+* Evidence-backed recurring themes
+* Multi-scope reflection
+* Security-focused authentication and authorization
+
+The application was developed using **Google AI Studio** with security-focused development instructions covering threat modeling, secure coding, authentication, database isolation, secret management, and verification.
+
+---
+
+
+## ⚠️ Security Notice
+
+Never commit production credentials or secrets to this repository.
+
+The Gemini API key must remain server-side and should be supplied through a secure secret-management mechanism such as Google Cloud Secret Manager.
+
+Firebase client configuration should not be treated as a server-side secret.
+
+---
+
+# 📜 License
+
+Copyright © 2026 Akula Vaenkata Saye Chandan. All rights reserved.
+
+This project is provided for demonstration and evaluation purposes only.
+Unauthorized copying, modification, redistribution, or commercial use of this
+code is not permitted without prior written permission from the author.
