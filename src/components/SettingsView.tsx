@@ -1,5 +1,5 @@
 import React from 'react';
-import { Settings, Shield, Sliders, Server, ExternalLink, Terminal } from 'lucide-react';
+import { Shield, Sliders } from 'lucide-react';
 import { PrivacyScope, UserPreferences } from '../types';
 
 interface SettingsViewProps {
@@ -12,61 +12,63 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onUpdatePreferences,
 }) => {
   return (
-    <main id="settings-view-section" className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
+    <main id="settings-view-section" className="max-w-3xl mx-auto px-4 sm:px-6 py-8">
       {/* Header */}
-      <div className="pb-6 border-b border-stone-200">
-        <span className="text-xs font-mono uppercase tracking-wider text-stone-500">
-          Preferences & Runtime Configuration
+      <div className="pb-6 border-b border-stone-200/80">
+        <span className="text-[11px] font-mono uppercase tracking-widest text-stone-400">
+          Preferences
         </span>
-        <h2 className="text-2xl font-serif text-stone-900 tracking-tight mt-0.5">
-          Application Settings
+        <h2 className="text-2xl font-serif font-normal text-stone-900 tracking-tight mt-0.5">
+          Vault Preferences
         </h2>
-        <p className="text-xs text-stone-600 mt-1">
-          Customize default privacy scopes, editor behaviors, and inspect production deployment architecture.
+        <p className="text-xs text-stone-500 mt-1.5 leading-relaxed">
+          Configure default AI privacy boundaries and editor behaviors.
         </p>
       </div>
 
       <div className="mt-6 space-y-6">
-        {/* Section 1: Default AI Privacy Firewall Configuration */}
-        <section className="p-5 rounded-xl border border-stone-200 bg-white shadow-2xs">
-          <div className="flex items-center gap-2 mb-3">
-            <Shield className="w-4 h-4 text-emerald-700" />
-            <h3 className="text-sm font-semibold text-stone-900">Default AI Privacy Firewall Scope</h3>
+        {/* Section 1: Default AI Privacy Firewall Scope */}
+        <section className="p-6 rounded-2xl border border-stone-200/90 bg-white shadow-2xs">
+          <div className="flex items-center gap-2.5 mb-2">
+            <div className="p-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200/50">
+              <Shield className="w-4 h-4" />
+            </div>
+            <h3 className="text-sm font-semibold text-stone-900 font-serif">Default AI Privacy Firewall Scope</h3>
           </div>
-          <p className="text-xs text-stone-600 mb-4">
-            Choose what journal context is shared by default whenever you begin a new reflection session with Gemini.
+          <p className="text-xs text-stone-500 mb-4 leading-relaxed font-sans">
+            Define which journal entries Gemini may access when initiating a new reflection conversation.
           </p>
 
-          <div className="space-y-2">
+          <div className="space-y-2.5">
             {[
               {
-                id: 'current',
-                label: 'Current entry only (Strict Isolation - Recommended)',
-                desc: 'Gemini has zero visibility into prior journal entries. Maximum privacy.',
+                id: 'all_vault',
+                label: 'Entire Eligible Vault (Default)',
+                desc: 'All memories available to Gemini are accessible. Private entries remain strictly excluded.',
               },
               {
                 id: 'selected',
-                label: 'Selected memories only',
-                desc: 'Prompt you to manually pick eligible past entries before conversation starts.',
+                label: 'Specific Thoughts',
+                desc: 'Prompt you to pick specific thoughts available to Gemini before starting.',
               },
               {
-                id: 'date_range',
-                label: 'Last 30 days',
-                desc: 'Include eligible entries from the past month for contextual continuity.',
+                id: 'by_label',
+                label: 'By Label',
+                desc: 'Include eligible memories tagged with selected labels (#tags).',
               },
               {
-                id: 'all_vault',
-                label: 'Entire Memory Vault',
-                desc: 'All non-private entries eligible. 🔒 Private entries remain completely excluded.',
+                id: 'current',
+                label: 'Current Thought Only',
+                desc: 'Gemini has zero visibility into prior journal entries. Maximum privacy.',
               },
             ].map((option) => (
               <label
                 key={option.id}
                 id={`pref-scope-${option.id}`}
-                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                className={`flex items-start gap-3.5 p-3.5 rounded-xl border cursor-pointer transition-all ${
                   preferences.defaultPrivacyScope === option.id
-                    ? 'bg-stone-50 border-stone-800 ring-1 ring-stone-800'
-                    : 'bg-white border-stone-200 hover:bg-stone-50/60'
+                    ? 'bg-stone-50/80 border-[#121212] ring-1 ring-[#121212]'
+                    : 'bg-white border-stone-200 hover:border-stone-300 hover:bg-stone-50/40'
                 }`}
               >
                 <input
@@ -77,11 +79,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   onChange={() =>
                     onUpdatePreferences({ defaultPrivacyScope: option.id as PrivacyScope })
                   }
-                  className="mt-1 text-stone-900 focus:ring-stone-500"
+                  className="mt-0.5 text-stone-900 focus:ring-stone-400 accent-stone-900"
                 />
                 <div>
-                  <span className="text-xs font-medium text-stone-900 block">{option.label}</span>
-                  <span className="text-[11px] text-stone-500 mt-0.5 block">{option.desc}</span>
+                  <span className="text-xs font-medium text-stone-900 block font-sans">{option.label}</span>
+                  <span className="text-[11px] text-stone-500 mt-0.5 block leading-normal font-sans">{option.desc}</span>
                 </div>
               </label>
             ))}
@@ -89,49 +91,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </section>
 
         {/* Section 2: Editor Preferences */}
-        <section className="p-5 rounded-xl border border-stone-200 bg-white shadow-2xs">
-          <div className="flex items-center gap-2 mb-3">
-            <Sliders className="w-4 h-4 text-stone-700" />
-            <h3 className="text-sm font-semibold text-stone-900">Editor Ergonomics</h3>
+        <section className="p-6 rounded-2xl border border-stone-200/90 bg-white shadow-2xs">
+          <div className="flex items-center gap-2.5 mb-2">
+            <div className="p-1.5 rounded-lg bg-stone-100 text-stone-700 border border-stone-200/50">
+              <Sliders className="w-4 h-4" />
+            </div>
+            <h3 className="text-sm font-semibold text-stone-900 font-serif">Editor Ergonomics</h3>
           </div>
 
-          <div className="flex items-center justify-between py-2 border-b border-stone-100">
+          <div className="flex items-center justify-between py-3 border-t border-stone-100 mt-3">
             <div>
-              <span className="text-xs font-medium text-stone-800 block">Auto-save while typing</span>
-              <span className="text-[11px] text-stone-500 block">Automatically sync drafts to Firestore while working</span>
+              <span className="text-xs font-medium text-stone-800 block font-sans">Auto-save while typing</span>
+              <span className="text-[11px] text-stone-500 block font-sans">Sync journal drafts to Cloud Firestore automatically while writing</span>
             </div>
             <button
               id="btn-toggle-autosave"
               type="button"
               onClick={() => onUpdatePreferences({ autoSaveEnabled: !preferences.autoSaveEnabled })}
-              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-stone-500 ${
-                preferences.autoSaveEnabled ? 'bg-stone-900' : 'bg-stone-200'
+              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-stone-400 ${
+                preferences.autoSaveEnabled ? 'bg-[#121212]' : 'bg-stone-200'
               }`}
             >
               <span
-                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out ${
                   preferences.autoSaveEnabled ? 'translate-x-4' : 'translate-x-0'
                 }`}
               />
             </button>
-          </div>
-        </section>
-
-        {/* Section 3: Cloud Run Deployment & Campaign Verification */}
-        <section className="p-5 rounded-xl border border-stone-200 bg-stone-50/60 shadow-2xs">
-          <div className="flex items-center gap-2 mb-2">
-            <Server className="w-4 h-4 text-stone-700" />
-            <h3 className="text-sm font-semibold text-stone-900">Cloud Run & Campaign Verification</h3>
-          </div>
-          <p className="text-xs text-stone-600 mb-3 leading-relaxed">
-            This application is configured for production deployment on Google Cloud Run with automated challenge verification.
-          </p>
-
-          <div className="bg-stone-900 text-stone-200 rounded-lg p-3 text-xs font-mono overflow-x-auto space-y-1">
-            <div className="text-stone-400"># Verification resource label binding:</div>
-            <div className="text-emerald-400">gcloud run services update personal-gemini-journal \</div>
-            <div className="text-emerald-400 pl-4">--update-labels=dev-tutorial=cloud-run-ai-challenge \</div>
-            <div className="text-emerald-400 pl-4">--region=asia-east1</div>
           </div>
         </section>
       </div>

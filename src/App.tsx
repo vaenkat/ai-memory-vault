@@ -39,7 +39,10 @@ export default function App() {
   // Journal entries & conversations in vault
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeEntry, setActiveEntry] = useState<JournalEntry | null>(null);
+  // Today thought being authored or edited (null = fresh new-thought draft)
+  const [todayEntry, setTodayEntry] = useState<JournalEntry | null>(null);
+  // Dedicated Reflection Context (only populated when Quick Reflection or specific memory reflection is explicitly invoked)
+  const [reflectContextEntry, setReflectContextEntry] = useState<JournalEntry | null>(null);
 
   // Active reflection chat state
   const [currentConversationId, setCurrentConversationId] = useState<string>(`conv-${Date.now()}`);
@@ -57,11 +60,14 @@ export default function App() {
 
   // User preferences & Privacy scope
   const [preferences, setPreferences] = useState<UserPreferences>({
-    defaultPrivacyScope: 'current',
+    defaultPrivacyScope: 'all_vault',
     readingWidth: 'standard',
     autoSaveEnabled: false,
   });
-  const [activePrivacyScope, setActivePrivacyScope] = useState<PrivacyScope>('current');
+  const [activePrivacyScope, setActivePrivacyScope] = useState<PrivacyScope>('all_vault');
+
+  // Static journal thought for the global header
+  const [headerJournalThought] = useState('Memory is a garden, tended one reflection at a time.');
 
   // Toasts
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -123,14 +129,17 @@ export default function App() {
           } as JournalEntry;
         });
         setEntries(fetchedEntries);
-        // Keep activeEntry synchronized with authoritative Firestore updates
-        setActiveEntry((curr) => {
+        // Keep todayEntry synchronized if editing an existing entry
+        setTodayEntry((curr) => {
           if (!curr || !curr.id) return curr;
           const matching = fetchedEntries.find((e) => e.id === curr.id);
-          if (matching) {
-            return matching;
-          }
-          return curr;
+          return matching || curr;
+        });
+        // Keep reflectContextEntry synchronized if active
+        setReflectContextEntry((curr) => {
+          if (!curr || !curr.id) return curr;
+          const matching = fetchedEntries.find((e) => e.id === curr.id);
+          return matching || curr;
         });
       },
       (error) => {
@@ -208,7 +217,8 @@ export default function App() {
     try {
       await signOut(auth);
       setCurrentTab('today');
-      setActiveEntry(null);
+      setTodayEntry(null);
+      setReflectContextEntry(null);
       setChatMessages([]);
       addToast('info', 'Signed Out', 'You have been safely signed out.');
     } catch (err: any) {
@@ -217,11 +227,23 @@ export default function App() {
     }
   };
 
+  // User Tab Navigation Handler (Enforces Strict State Separation)
+  const handleTabChange = (tab: TabType) => {
+    if (tab === 'reflect') {
+      // Direct navigation to Reflect tab:
+      // MUST default to "Entire Eligible Vault"
+      // Automatically include all eligible memories without inheriting Today's active entry
+      setReflectContextEntry(null);
+      setActivePrivacyScope('all_vault');
+    }
+    setCurrentTab(tab);
+  };
+
   // Save Journal Entry Handler (Input-to-Save Completeness & Undefined-Stripping)
-  const handleSaveEntry = async (entryData: Partial<JournalEntry>) => {
+  const handleSaveEntry = async (entryData: Partial<JournalEntry>): Promise<JournalEntry | null> => {
     if (!user) {
       addToast('error', 'Sign-in Required', 'Please sign in to save journal entries.');
-      return;
+      return null;
     }
 
     setIsSavingEntry(true);
@@ -236,7 +258,7 @@ export default function App() {
       tags: entryData.tags || [],
       mood: entryData.mood || 'Reflective',
       isGeminiPrivate: Boolean(entryData.isGeminiPrivate),
-      createdAt: entryData.createdAt || activeEntry?.createdAt || new Date().toISOString(),
+      createdAt: entryData.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 
@@ -244,7 +266,6 @@ export default function App() {
       const cleanPayload = sanitizePayload(fullPayload);
       await setDoc(entryDocRef, cleanPayload, { merge: true });
 
-      setActiveEntry(fullPayload);
       // Synchronize entries state immediately so Reflect, Quick Reflection, and Vault
       // have the authoritative state without waiting for onSnapshot
       setEntries((prev) => {
@@ -258,6 +279,7 @@ export default function App() {
       });
       setLastSavedAt(new Date().toISOString());
       addToast('success', 'Entry Saved', 'Persisted securely to your isolated memory vault.');
+      return fullPayload;
     } catch (err: any) {
       console.error('Error saving entry:', err);
       addToast(
@@ -267,8 +289,18 @@ export default function App() {
         () => handleSaveEntry(entryData)
       );
       handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}/entries/${entryId}`);
+      throw err;
     } finally {
       setIsSavingEntry(false);
+    }
+  };
+
+  // Save specifically from Today Editor:
+  // After save succeeds, reset todayEntry to null so the editor returns to a clean new-thought state
+  const handleSaveTodayEntry = async (entryData: Partial<JournalEntry>) => {
+    const saved = await handleSaveEntry(entryData);
+    if (saved) {
+      setTodayEntry(null);
     }
   };
 
@@ -278,8 +310,11 @@ export default function App() {
 
     try {
       await deleteDoc(doc(db, 'users', user.uid, 'entries', id));
-      if (activeEntry?.id === id) {
-        setActiveEntry(null);
+      if (todayEntry?.id === id) {
+        setTodayEntry(null);
+      }
+      if (reflectContextEntry?.id === id) {
+        setReflectContextEntry(null);
       }
       addToast('info', 'Memory Removed', 'The journal entry was deleted from your vault.');
     } catch (err: any) {
@@ -291,7 +326,7 @@ export default function App() {
 
   // Select Entry to Edit
   const handleSelectEntryToEdit = (entry: JournalEntry) => {
-    setActiveEntry(entry);
+    setTodayEntry(entry);
     setCurrentTab('today');
   };
 
@@ -301,15 +336,41 @@ export default function App() {
       addToast('error', 'Privacy Quarantined', 'This memory is classified as 🔒 Private and cannot be sent to Gemini.');
       return;
     }
-    setActiveEntry(entry);
+    setReflectContextEntry(entry);
     setCurrentTab('reflect');
+    setActivePrivacyScope('current');
+  };
+
+  // Toggle Privacy Status for a Memory Entry (Keep Private action)
+  const handleToggleEntryPrivacy = async (entry: JournalEntry) => {
+    const nextPrivateState = !entry.isGeminiPrivate;
+    const updatedEntry: JournalEntry = {
+      ...entry,
+      isGeminiPrivate: nextPrivateState,
+      updatedAt: new Date().toISOString(),
+    };
+    if (todayEntry?.id === entry.id) {
+      setTodayEntry(updatedEntry);
+    }
+    if (reflectContextEntry?.id === entry.id) {
+      setReflectContextEntry(updatedEntry);
+    }
+    await handleSaveEntry(updatedEntry);
+    addToast(
+      'info',
+      nextPrivateState ? 'Marked Private' : 'Available to Gemini',
+      nextPrivateState
+        ? 'This thought will never be shared with Gemini.'
+        : 'This thought is now available to Gemini based on your reflection scope.'
+    );
   };
 
   // Send Message in Reflect View
   const handleSendMessage = async (
     prompt: string,
     scope: PrivacyScope,
-    selectedMemoryIds: string[],
+    selectedMemoryIds: string[] = [],
+    selectedLabels: string[] = [],
     overrideActiveEntry?: JournalEntry | null,
     startFresh?: boolean
   ) => {
@@ -331,7 +392,7 @@ export default function App() {
       setCurrentConversationId(convId);
     }
 
-    const currentEntryToUse = overrideActiveEntry !== undefined ? overrideActiveEntry : activeEntry;
+    const currentEntryToUse = overrideActiveEntry !== undefined ? overrideActiveEntry : reflectContextEntry;
     const baseMessages = startFresh ? [] : chatMessages;
     const updatedMessages = [...baseMessages, userMsg];
 
@@ -344,15 +405,19 @@ export default function App() {
         scope,
         entries,
         currentEntryToUse,
-        selectedMemoryIds
+        selectedMemoryIds,
+        selectedLabels
       );
 
+      const isFallback = response.isFallback || response.provider === 'local_fallback';
       const modelMsg: ChatMessage = {
         id: `msg-${Date.now()}-model`,
         role: 'model',
         content: response.reply,
         timestamp: new Date().toISOString(),
         modelUsed: response.modelUsed,
+        isFallback,
+        provider: response.provider,
       };
 
       const finalMessages = [...updatedMessages, modelMsg];
@@ -368,6 +433,7 @@ export default function App() {
           title: currentEntryToUse ? `Reflection on "${currentEntryToUse.title}"` : 'Vault Reflection',
           contextScope: scope,
           includedMemoryIds: selectedMemoryIds,
+          includedLabels: selectedLabels,
           messages: finalMessages,
           updatedAt: new Date().toISOString(),
           createdAt: new Date().toISOString(),
@@ -382,7 +448,7 @@ export default function App() {
       const errMsg = err?.message || 'Failed to generate reflection with Gemini.';
       setChatError(errMsg);
       addToast('error', 'Reflection Error', errMsg, () =>
-        handleSendMessage(prompt, scope, selectedMemoryIds, currentEntryToUse, startFresh)
+        handleSendMessage(prompt, scope, selectedMemoryIds, selectedLabels, currentEntryToUse, startFresh)
       );
     } finally {
       setIsGeneratingReflection(false);
@@ -396,7 +462,19 @@ export default function App() {
       const result = await analyzeVaultThemes(entries);
       if (result.themes && result.themes.length > 0) {
         setThemes(result.themes);
-        addToast('success', 'Themes Synthesized', `Discovered ${result.themes.length} grounded recurring life themes.`);
+        if (result.isFallback) {
+          addToast(
+            'info',
+            'Degraded Mode (Offline Fallback)',
+            result.note || 'Themes synthesized locally in degraded mode because live Gemini is unconfigured or unreachable.'
+          );
+        } else {
+          addToast(
+            'success',
+            'Themes Synthesized',
+            `Discovered ${result.themes.length} grounded recurring life themes via Gemini.`
+          );
+        }
       } else {
         addToast('info', 'Theme Analysis', result.message || 'Need more eligible entries to identify recurring patterns.');
       }
@@ -427,7 +505,8 @@ export default function App() {
 
       setEntries([]);
       setConversations([]);
-      setActiveEntry(null);
+      setTodayEntry(null);
+      setReflectContextEntry(null);
       setChatMessages([]);
       setThemes([]);
 
@@ -460,16 +539,18 @@ export default function App() {
   // Helper for scope display label
   const getScopeLabel = (scope: PrivacyScope) => {
     switch (scope) {
-      case 'current':
-        return '🔒 Current Entry Only';
-      case 'selected':
-        return '🔒 Selected Memories';
-      case 'date_range':
-        return '🔒 Last 30 Days';
       case 'all_vault':
-        return '🔒 Eligible Vault Memories';
+        return 'Protected · Entire eligible vault';
+      case 'selected':
+        return 'Protected · Specific thoughts';
+      case 'by_label':
+        return 'Protected · By label';
+      case 'current':
+        return 'Protected · Current thought only';
+      case 'date_range':
+        return 'Protected · Last 30 days';
       default:
-        return '🔒 Current Entry Only';
+        return 'Protected · Entire eligible vault';
     }
   };
 
@@ -512,7 +593,7 @@ export default function App() {
       {/* Left Minimalist Navigation (Dark Obsidian Sidebar) */}
       <Navigation
         currentTab={currentTab}
-        onSelectTab={setCurrentTab}
+        onSelectTab={handleTabChange}
         user={user}
         onSignOut={handleSignOut}
         privacyScope={activePrivacyScope}
@@ -523,32 +604,25 @@ export default function App() {
         {/* Clean Minimalism Top Header */}
         <header
           id="main-header"
-          className="h-20 border-b border-gray-200/80 px-6 sm:px-10 flex items-center justify-between bg-white/70 backdrop-blur-md shrink-0 z-20"
+          className="h-18 border-b border-stone-200/80 px-6 sm:px-10 flex items-center justify-between bg-white/80 backdrop-blur-md shrink-0 z-20"
         >
           <div className="flex flex-col">
-            <h1 className="text-lg font-semibold tracking-tight text-[#1A1A1A]">
-              {new Date().toLocaleDateString(undefined, {
-                month: 'long',
-                day: 'numeric',
-                year: 'numeric',
-              })}
+            <h1 className="text-lg sm:text-xl font-serif font-normal tracking-tight text-stone-900">
+              {(() => {
+                const now = new Date();
+                const weekday = now.toLocaleDateString('en-GB', { weekday: 'short' });
+                const day = now.getDate();
+                const month = now.toLocaleDateString('en-GB', { month: 'long' });
+                const year = now.getFullYear();
+                return `${weekday}, ${day} ${month} ${year}`;
+              })()}
             </h1>
-            <div className="flex items-center gap-2 mt-0.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-              <span className="text-[11px] uppercase tracking-widest text-gray-500 font-bold truncate max-w-[200px] sm:max-w-none">
-                Authenticated: {user.email}
-              </span>
-            </div>
+            <span className="text-xs text-stone-500 font-serif italic mt-0.5 select-none">
+              {headerJournalThought}
+            </span>
           </div>
 
-          <div className="flex items-center gap-3 sm:gap-6">
-            <div className="hidden sm:flex items-center gap-2 bg-gray-100/90 px-4 py-2 rounded-full border border-gray-200">
-              <span className="text-[11px] font-bold text-gray-400">AI SCOPE</span>
-              <span className="text-xs font-semibold text-[#1A1A1A]">
-                {getScopeLabel(activePrivacyScope)}
-              </span>
-            </div>
-
+          <div className="flex items-center gap-3">
             {currentTab === 'today' ? (
               <button
                 id="header-save-btn"
@@ -557,7 +631,7 @@ export default function App() {
                   if (saveBtn) saveBtn.click();
                 }}
                 disabled={isSavingEntry}
-                className="bg-[#121212] text-white text-xs px-5 sm:px-6 py-2 rounded-full font-bold uppercase tracking-wider hover:bg-stone-800 transition-colors shadow-xs focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:outline-none"
+                className="bg-[#121212] text-white text-xs px-4 sm:px-5 py-2 rounded-xl font-medium tracking-wide hover:bg-stone-800 transition-colors shadow-2xs focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:outline-none"
               >
                 {isSavingEntry ? 'Saving...' : 'Save Reflection'}
               </button>
@@ -569,17 +643,17 @@ export default function App() {
                     document.getElementById('chat-prompt-input');
                   if (promptInput) (promptInput as HTMLInputElement).focus();
                 }}
-                className="bg-[#121212] text-white text-xs px-5 sm:px-6 py-2 rounded-full font-bold uppercase tracking-wider hover:bg-stone-800 transition-colors shadow-xs"
+                className="bg-[#121212] text-white text-xs px-4 sm:px-5 py-2 rounded-xl font-medium tracking-wide hover:bg-stone-800 transition-colors shadow-2xs focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:outline-none"
               >
-                Reflect with AI
+                Reflect with Gemini
               </button>
             ) : (
               <button
                 onClick={() => {
-                  setActiveEntry(null);
+                  setTodayEntry(null);
                   setCurrentTab('today');
                 }}
-                className="bg-[#121212] text-white text-xs px-5 sm:px-6 py-2 rounded-full font-bold uppercase tracking-wider hover:bg-stone-800 transition-colors shadow-xs"
+                className="bg-[#121212] text-white text-xs px-4 sm:px-5 py-2 rounded-xl font-medium tracking-wide hover:bg-stone-800 transition-colors shadow-2xs focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:outline-none"
               >
                 + New Entry
               </button>
@@ -590,13 +664,17 @@ export default function App() {
         {/* Center Workspace & Right Inspection Panel */}
         <div className="flex-1 flex min-h-0 overflow-hidden">
           {/* Active View Container */}
-          <section className="flex-1 overflow-y-auto p-4 sm:p-8 lg:p-12">
+          <section className="flex-1 overflow-y-auto p-4 sm:p-8 lg:p-10">
             {currentTab === 'today' && (
               <TodayEditor
-                entry={activeEntry}
-                onSave={handleSaveEntry}
+                entry={todayEntry}
+                onSave={handleSaveTodayEntry}
                 onUpdateDraft={(draft) => {
-                  setActiveEntry((prev) => ({
+                  if (!draft) {
+                    setTodayEntry(null);
+                    return;
+                  }
+                  setTodayEntry((prev) => ({
                     id: prev?.id || `entry-${Date.now()}`,
                     userId: user ? user.uid : (prev?.userId || ''),
                     title: draft.title !== undefined ? draft.title : (prev?.title || ''),
@@ -620,9 +698,11 @@ export default function App() {
                     userId: user ? user.uid : entry.userId,
                   };
 
-                  setActiveEntry(completeEntry);
+                  const targetScope = preferences.defaultPrivacyScope || 'all_vault';
+                  // Explicit Quick Reflection: intentionally inject this thought as reflection context
+                  setReflectContextEntry(completeEntry);
                   setCurrentTab('reflect');
-                  setActivePrivacyScope('current');
+                  setActivePrivacyScope(targetScope);
 
                   // Background auto-save so memory is preserved
                   if (user && completeEntry.content) {
@@ -632,7 +712,7 @@ export default function App() {
                   }
 
                   if (initialPrompt) {
-                    handleSendMessage(initialPrompt, 'current', [], completeEntry, true);
+                    handleSendMessage(initialPrompt, targetScope, [], [], completeEntry, true);
                   }
                 }}
                 isSaving={isSavingEntry}
@@ -649,12 +729,13 @@ export default function App() {
                 onAnalyzeThemes={handleAnalyzeThemes}
                 themes={themes}
                 isAnalyzingThemes={isAnalyzingThemes}
+                onTogglePrivacy={handleToggleEntryPrivacy}
               />
             )}
 
             {currentTab === 'reflect' && (
               <ReflectView
-                activeEntry={activeEntry}
+                activeEntry={reflectContextEntry}
                 allMemories={entries}
                 messages={chatMessages}
                 onSendMessage={handleSendMessage}
@@ -665,23 +746,27 @@ export default function App() {
                   setCurrentConversationId(`conv-${Date.now()}`);
                   setChatMessages([]);
                   setChatError(null);
+                  setReflectContextEntry(null);
+                  setActivePrivacyScope('all_vault');
                 }}
                 conversations={conversations}
                 currentConversationId={currentConversationId}
                 onSelectConversation={(conv) => {
                   setCurrentConversationId(conv.id);
                   setChatMessages(conv.messages || []);
-                  setActivePrivacyScope(conv.contextScope || 'current');
+                  setActivePrivacyScope(conv.contextScope || 'all_vault');
                   if (conv.entryId) {
                     const found = entries.find((e) => e.id === conv.entryId);
-                    if (found) setActiveEntry(found);
+                    setReflectContextEntry(found || null);
+                  } else {
+                    setReflectContextEntry(null);
                   }
                 }}
                 error={chatError}
                 onRetry={() => {
                   const lastUserMsg = [...chatMessages].reverse().find((m) => m.role === 'user');
                   if (lastUserMsg) {
-                    handleSendMessage(lastUserMsg.content, activePrivacyScope, []);
+                    handleSendMessage(lastUserMsg.content, activePrivacyScope, [], []);
                   }
                 }}
               />
@@ -707,81 +792,76 @@ export default function App() {
           {/* Right Inspection & Integrity Sidebar (Clean Minimalism) */}
           <aside
             id="vault-integrity-aside"
-            className="hidden xl:flex w-80 shrink-0 border-l border-gray-200/80 bg-white p-8 flex-col gap-8 overflow-y-auto"
+            className="hidden xl:flex w-80 shrink-0 border-l border-stone-200/80 bg-white/90 p-7 flex-col gap-6 overflow-y-auto"
           >
             {/* Gemini Reflection Snippet */}
-            <div className="flex flex-col gap-3">
-              <h3 className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">
+            <div className="flex flex-col gap-2.5">
+              <span className="text-[10px] font-mono text-stone-400 uppercase tracking-widest">
                 Gemini Reflection
-              </h3>
-              <div className="bg-[#FAF9F6] p-5 rounded-2xl border border-gray-100">
-                <p className="text-sm leading-relaxed text-gray-700 italic font-serif mb-4">
+              </span>
+              <div className="bg-[#FAF9F6] p-4 rounded-2xl border border-stone-200/70">
+                <p className="text-xs leading-relaxed text-stone-700 italic font-serif mb-3">
                   {latestAssistantMessage
                     ? `"${latestAssistantMessage.content.slice(0, 180)}${
                         latestAssistantMessage.content.length > 180 ? '...' : ''
                       }"`
                     : '"Building the AI Memory Vault has been a lesson in restraint. Thoughts aren\'t just encrypted, but isolated—invisible to the intelligence helping you process them unless you explicitly turn the key."'}
                 </p>
-                <div className="flex items-center gap-2 text-[10px] text-gray-400 font-bold uppercase">
+                <div className="flex items-center gap-1.5 text-[10px] text-stone-400 font-mono uppercase">
                   <span className="w-1.5 h-1.5 rounded-full bg-stone-400"></span>
-                  <span>
-                    Memory Connection:{' '}
-                    {activeEntry ? activeEntry.title || 'Current Draft' : 'Active Vault'}
+                  <span className="truncate">
+                    Anchor:{' '}
+                    {currentTab === 'reflect'
+                      ? reflectContextEntry
+                        ? reflectContextEntry.title || 'Current Reflection'
+                        : 'Entire Eligible Vault'
+                      : todayEntry
+                      ? todayEntry.title || 'Draft Thought'
+                      : 'New Thought'}
                   </span>
                 </div>
               </div>
             </div>
 
             {/* Vault Integrity Status */}
-            <div className="flex flex-col gap-3">
-              <h3 className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">
+            <div className="flex flex-col gap-2.5">
+              <span className="text-[10px] font-mono text-stone-400 uppercase tracking-widest">
                 Vault Integrity
-              </h3>
-              <div className="space-y-3.5">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-gray-500 font-medium">Firestore Isolation</span>
-                  <span className="text-emerald-600 font-bold uppercase tracking-tight">
-                    Verified
+              </span>
+              <div className="space-y-2.5 bg-stone-50/70 p-3.5 rounded-xl border border-stone-200/60 font-mono text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-stone-500">Firestore Rules</span>
+                  <span className="text-emerald-700 font-medium">
+                    Owner-Bound
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-gray-500 font-medium">Secret Management</span>
-                  <span className="text-emerald-600 font-bold uppercase tracking-tight">
+                <div className="flex items-center justify-between">
+                  <span className="text-stone-500">Secret Storage</span>
+                  <span className="text-emerald-700 font-medium">
                     GSM Active
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-gray-500 font-medium">Model Fallback</span>
-                  <span className="text-blue-600 font-bold uppercase tracking-tight">
-                    Ready (3.6)
+                <div className="flex items-center justify-between">
+                  <span className="text-stone-500">Model Ladder</span>
+                  <span className="text-stone-700 font-medium">
+                    Gemini 3.6+
                   </span>
                 </div>
               </div>
             </div>
 
             {/* End-to-End Database Isolation Guarantee */}
-            <div className="mt-auto pt-6 border-t border-gray-100 text-[10px] leading-relaxed text-gray-400">
+            <div className="mt-auto pt-5 border-t border-stone-100 text-[10px] leading-relaxed text-stone-400 font-mono">
               <p>
-                This session is protected by{' '}
-                <strong className="text-gray-600 font-semibold">
-                  End-to-End Database Isolation
+                Protected by{' '}
+                <strong className="text-stone-600 font-medium">
+                  Authoritative Privacy Firewall
                 </strong>
-                . Gemini only accesses data you explicitly unlock. No prompt data is used for
-                training.
+                . Gemini only accesses entries you explicitly designate as available.
               </p>
             </div>
           </aside>
         </div>
-
-        {/* System Status Minimalist Footer */}
-        <footer
-          id="main-footer"
-          className="h-12 bg-gray-50/90 border-t border-gray-200 px-6 sm:px-10 flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-gray-400 shrink-0"
-        >
-          <div>System Status: All Nodes Secure</div>
-          <div className="hidden sm:block font-mono">dev-tutorial=cloud-run-ai-challenge</div>
-          <div>Build v2.4.1-Stable</div>
-        </footer>
       </main>
 
       {/* Toast Notification Container */}

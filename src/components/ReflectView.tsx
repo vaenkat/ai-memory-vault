@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, Lock, Shield, RefreshCw, AlertCircle, CheckCircle2, ChevronDown, History } from 'lucide-react';
+import { Send, Sparkles, Lock, Shield, RefreshCw, AlertCircle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { ChatMessage, JournalEntry, PrivacyScope, Conversation } from '../types';
 import { isEntryClassifiedPrivate } from '../lib/api';
@@ -11,7 +11,8 @@ interface ReflectViewProps {
   onSendMessage: (
     prompt: string,
     scope: PrivacyScope,
-    selectedMemoryIds: string[]
+    selectedMemoryIds: string[],
+    selectedLabels?: string[]
   ) => Promise<void>;
   isGenerating: boolean;
   activeScope: PrivacyScope;
@@ -48,11 +49,28 @@ export const ReflectView: React.FC<ReflectViewProps> = ({
 }) => {
   const [inputText, setInputText] = useState('');
   const [selectedMemoryIds, setSelectedMemoryIds] = useState<string[]>([]);
-  const [showMemoryPicker, setShowMemoryPicker] = useState(false);
+  const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Eligible memories (excluding private entries)
-  const eligibleMemories = allMemories.filter((m) => !isEntryClassifiedPrivate(m));
+  const eligibleMemories = React.useMemo(
+    () => allMemories.filter((m) => !isEntryClassifiedPrivate(m)),
+    [allMemories]
+  );
+
+  // Available labels from eligible memories only
+  const allAvailableLabels = React.useMemo(() => {
+    const labelSet = new Set<string>();
+    eligibleMemories.forEach((m) => {
+      if (Array.isArray(m.tags)) {
+        m.tags.forEach((t) => {
+          const trimmed = typeof t === 'string' ? t.trim() : '';
+          if (trimmed) labelSet.add(trimmed);
+        });
+      }
+    });
+    return Array.from(labelSet).sort();
+  }, [eligibleMemories]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -64,12 +82,12 @@ export const ReflectView: React.FC<ReflectViewProps> = ({
 
     const textToSend = inputText.trim();
     setInputText('');
-    await onSendMessage(textToSend, activeScope, selectedMemoryIds);
+    await onSendMessage(textToSend, activeScope, selectedMemoryIds, selectedLabels);
   };
 
   const handlePresetClick = async (presetText: string) => {
     if (isGenerating) return;
-    await onSendMessage(presetText, activeScope, selectedMemoryIds);
+    await onSendMessage(presetText, activeScope, selectedMemoryIds, selectedLabels);
   };
 
   const toggleMemorySelection = (id: string) => {
@@ -78,92 +96,74 @@ export const ReflectView: React.FC<ReflectViewProps> = ({
     );
   };
 
-  const getScopeBadge = () => {
+  const toggleLabelSelection = (label: string) => {
+    setSelectedLabels((prev) =>
+      prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label]
+    );
+  };
+
+  const getStatusSubtext = () => {
     switch (activeScope) {
-      case 'current':
-        return {
-          title: '🔒 Protected · Current entry only',
-          desc: 'Gemini has zero access to past memories; only the current draft is provided.',
-        };
-      case 'selected':
-        return {
-          title: `🔒 Protected · ${selectedMemoryIds.length} Selected memories`,
-          desc: 'Only specifically chosen eligible memories are shared with Gemini.',
-        };
-      case 'date_range':
-        return {
-          title: '🔒 Protected · Last 30 days',
-          desc: 'Eligible non-private memories from the last month are provided for context.',
-        };
       case 'all_vault':
-        return {
-          title: '🔒 Protected · Entire eligible vault',
-          desc: 'All non-private memories are accessible. Private entries remain strictly excluded.',
-        };
+        return 'All available thoughts included · Private thoughts excluded';
+      case 'selected':
+        return `${selectedMemoryIds.length} specific thought${
+          selectedMemoryIds.length === 1 ? '' : 's'
+        } included · Private thoughts excluded`;
+      case 'by_label': {
+        const matchingCount = eligibleMemories.filter((m) => {
+          const entryTags = (m.tags || []).map((t) => t.toLowerCase().trim());
+          return selectedLabels.some((l) => entryTags.includes(l.toLowerCase().trim()));
+        }).length;
+        return selectedLabels.length > 0
+          ? `${selectedLabels.map((l) => '#' + l).join(', ')} (${matchingCount} thought${
+              matchingCount === 1 ? '' : 's'
+            }) · Private thoughts excluded`
+          : 'Select labels below · Private thoughts excluded';
+      }
+      case 'current':
+        return activeEntry
+          ? `Current thought only ("${activeEntry.title || 'Untitled'}") · Past thoughts excluded`
+          : 'Current thought only · Past thoughts excluded';
+      default:
+        return 'All available thoughts included · Private thoughts excluded';
     }
   };
 
-  const scopeBadge = getScopeBadge();
-
   return (
-    <main id="reflect-view-section" className="max-w-4xl mx-auto px-4 sm:px-6 py-6 flex flex-col min-h-[calc(100vh-5rem)]">
+    <main id="reflect-view-section" className="max-w-3xl mx-auto px-4 sm:px-6 py-6 flex flex-col min-h-[calc(100vh-6rem)]">
       {/* Privacy Firewall Control Header */}
-      <div className="bg-white border border-stone-200 rounded-2xl p-4 shadow-2xs mb-6">
+      <div className="bg-white border border-stone-200/90 rounded-2xl p-4 sm:p-5 shadow-2xs mb-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1 font-mono">
-                <Shield className="w-3 h-3 text-emerald-700" />
-                {scopeBadge.title}
-              </span>
-              <span className="text-[11px] text-stone-500 font-mono">
-                AI PRIVACY FIREWALL
-              </span>
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-stone-900 tracking-tight">
+              <Shield className="w-3.5 h-3.5 text-emerald-700" />
+              <span>Protected by Privacy Firewall</span>
             </div>
-            <p className="text-xs text-stone-600 mt-1">{scopeBadge.desc}</p>
+            <p className="text-xs text-stone-500 mt-1 font-serif italic">
+              {getStatusSubtext()}
+            </p>
           </div>
 
-          {/* Context Scope Dropdown / Controls */}
-          <div className="flex flex-wrap items-center gap-2 self-start sm:self-center">
-            {conversations && conversations.length > 0 && (
-              <select
-                id="select-saved-conversation"
-                value={currentConversationId || ''}
-                onChange={(e) => {
-                  const conv = conversations.find((c) => c.id === e.target.value);
-                  if (conv && onSelectConversation) onSelectConversation(conv);
-                }}
-                className="text-xs bg-stone-50 border border-stone-300 rounded-lg px-2.5 py-1.5 text-stone-700 font-medium focus:outline-none focus:border-stone-500 max-w-[170px] truncate"
-                aria-label="Switch between saved reflection sessions"
-              >
-                <option value="" disabled>
-                  History ({conversations.length})
-                </option>
-                {conversations.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.title || 'Untitled Session'}
-                  </option>
-                ))}
-              </select>
-            )}
-
+          {/* Controls: ONE primary scope control + subtle New Session button */}
+          <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
             <select
               id="select-privacy-scope"
               value={activeScope}
               onChange={(e) => onChangeScope(e.target.value as PrivacyScope)}
-              className="text-xs bg-stone-50 border border-stone-300 rounded-lg px-2.5 py-1.5 text-stone-800 font-medium focus:outline-none focus:border-stone-500"
+              className="text-xs bg-stone-50 hover:bg-stone-100/80 border border-stone-200 rounded-xl px-3 py-2 text-stone-800 font-medium focus:outline-none focus:ring-1 focus:ring-stone-400 transition-colors shadow-2xs cursor-pointer"
               aria-label="Select privacy scope for AI reflection"
             >
-              <option value="current">Current entry only (Default)</option>
-              <option value="selected">Selected memories...</option>
-              <option value="date_range">Last 30 days</option>
-              <option value="all_vault">Entire eligible vault</option>
+              <option value="all_vault">Entire Eligible Vault</option>
+              <option value="selected">Specific Thoughts</option>
+              <option value="by_label">By Label</option>
+              <option value="current">Current Thought Only</option>
             </select>
 
             <button
               id="btn-clear-chat"
               onClick={onClearConversation}
-              className="text-xs text-stone-600 hover:text-stone-900 px-2.5 py-1.5 rounded-lg border border-stone-200 bg-white hover:bg-stone-50 transition-colors shadow-2xs font-medium"
+              className="text-xs text-stone-600 hover:text-stone-900 px-3 py-2 rounded-xl border border-stone-200 bg-white hover:bg-stone-50 transition-colors shadow-2xs font-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-stone-400"
               title="Start a fresh reflection session"
             >
               + New Session
@@ -171,21 +171,21 @@ export const ReflectView: React.FC<ReflectViewProps> = ({
           </div>
         </div>
 
-        {/* Selected Memories Picker Drawer */}
+        {/* Specific Thoughts Picker Drawer */}
         {activeScope === 'selected' && (
-          <div className="mt-4 pt-3 border-t border-stone-100">
+          <div id="drawer-specific-thoughts" className="mt-4 pt-3 border-t border-stone-100">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-stone-800">
-                Choose eligible memories to share with Gemini ({selectedMemoryIds.length} selected):
+              <span className="text-xs font-medium text-stone-700">
+                Choose specific thoughts to share with Gemini ({selectedMemoryIds.length} selected):
               </span>
-              <span className="text-[11px] text-amber-800 bg-amber-50 px-2 py-0.5 rounded font-mono">
+              <span className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200/60 px-2 py-0.5 rounded font-mono">
                 Private entries excluded
               </span>
             </div>
 
             {eligibleMemories.length === 0 ? (
               <p className="text-xs text-stone-500 italic py-2">
-                No eligible memories found. Any entry marked as private is permanently barred from Gemini.
+                No memories available to Gemini found. Any entry marked as private is strictly excluded.
               </p>
             ) : (
               <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-1">
@@ -199,7 +199,7 @@ export const ReflectView: React.FC<ReflectViewProps> = ({
                       onClick={() => toggleMemorySelection(m.id)}
                       className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1.5 ${
                         isSelected
-                          ? 'bg-stone-900 text-stone-100 border-stone-900'
+                          ? 'bg-[#121212] text-stone-100 border-[#121212]'
                           : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100'
                       }`}
                     >
@@ -214,24 +214,93 @@ export const ReflectView: React.FC<ReflectViewProps> = ({
             )}
           </div>
         )}
+
+        {/* By Label Picker Drawer */}
+        {activeScope === 'by_label' && (
+          <div id="drawer-by-label" className="mt-4 pt-3 border-t border-stone-100">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium text-stone-700">
+                Select labels to include ({selectedLabels.length} selected ·{' '}
+                {
+                  eligibleMemories.filter((m) => {
+                    const entryTags = (m.tags || []).map((t) => t.toLowerCase().trim());
+                    return selectedLabels.some((l) => entryTags.includes(l.toLowerCase().trim()));
+                  }).length
+                }{' '}
+                matching thoughts):
+              </span>
+              <span className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200/60 px-2 py-0.5 rounded font-mono">
+                Private entries excluded
+              </span>
+            </div>
+
+            {allAvailableLabels.length === 0 ? (
+              <p className="text-xs text-stone-500 italic py-2">
+                No labels found on memories available to Gemini. Tag your entries with labels (#tags) to filter by label.
+              </p>
+            ) : (
+              <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-1">
+                {allAvailableLabels.map((lbl) => {
+                  const isSelected = selectedLabels.includes(lbl);
+                  const countForLabel = eligibleMemories.filter((m) =>
+                    (m.tags || []).some((t) => t.toLowerCase().trim() === lbl.toLowerCase().trim())
+                  ).length;
+                  return (
+                    <button
+                      key={lbl}
+                      type="button"
+                      id={`label-pill-${lbl}`}
+                      onClick={() => toggleLabelSelection(lbl)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1.5 ${
+                        isSelected
+                          ? 'bg-[#121212] text-stone-100 border-[#121212]'
+                          : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100'
+                      }`}
+                    >
+                      <span>#{lbl}</span>
+                      <span className="text-[10px] opacity-70 font-mono">({countForLabel})</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {selectedLabels.length === 0 && allAvailableLabels.length > 0 && (
+              <p className="text-[11px] text-stone-500 mt-2 italic font-mono">
+                Click one or more labels above to share thoughts tagged with those labels.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Current Thought Only Indicator */}
+        {activeScope === 'current' && !activeEntry && (
+          <div id="drawer-current-thought-empty" className="mt-3 pt-2.5 border-t border-stone-100 flex items-center justify-between gap-2 text-xs text-stone-500 font-mono">
+            <span className="flex items-center gap-1.5 text-stone-600">
+              <span>No specific thought attached. Gemini will converse without vault memories.</span>
+            </span>
+            <span className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200/60 px-2 py-0.5 rounded">
+              Past memories withheld
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Active Context Preview Banner */}
       {activeEntry && (
-        <div className="mb-4 px-4 py-2.5 bg-stone-100/70 border border-stone-200 rounded-xl text-xs flex items-center justify-between gap-2">
+        <div className="mb-4 px-3.5 py-2 bg-stone-100/80 border border-stone-200/80 rounded-xl text-xs flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 truncate">
-            <span className="text-stone-500 font-mono">Active Entry:</span>
-            <span className="font-medium text-stone-900 truncate">
+            <span className="text-stone-400 font-mono text-[11px]">Thought Context:</span>
+            <span className="font-serif italic text-stone-800 truncate">
               {activeEntry.title || 'Untitled'}
             </span>
           </div>
           {isEntryClassifiedPrivate(activeEntry) ? (
-            <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-medium shrink-0 flex items-center gap-1">
+            <span className="px-2 py-0.5 rounded-full bg-amber-100/90 text-amber-900 border border-amber-200 text-[10px] font-mono shrink-0 flex items-center gap-1">
               <Lock className="w-3 h-3" />
-              <span>Private Entry (Text withheld from AI)</span>
+              <span>Private (Withheld from Gemini)</span>
             </span>
           ) : (
-            <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 text-[10px] font-medium shrink-0">
+            <span className="px-2 py-0.5 rounded-full bg-emerald-100/80 text-emerald-900 text-[10px] font-mono shrink-0">
               Active Context
             </span>
           )}
@@ -239,20 +308,20 @@ export const ReflectView: React.FC<ReflectViewProps> = ({
       )}
 
       {/* Messages Thread */}
-      <div id="messages-container" className="flex-1 space-y-4 mb-6">
+      <div id="messages-container" className="flex-1 space-y-5 mb-6">
         {messages.length === 0 ? (
           <div
             id="empty-reflection-state"
-            className="text-center py-12 px-4 rounded-2xl border border-dashed border-stone-200 bg-stone-50/40 my-auto"
+            className="text-center py-12 px-6 rounded-2xl border border-stone-200/80 bg-white shadow-2xs my-auto"
           >
-            <div className="w-10 h-10 rounded-full bg-stone-200 text-stone-600 flex items-center justify-center mx-auto mb-3">
-              <Sparkles className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-full bg-stone-100 text-stone-700 flex items-center justify-center mx-auto mb-3.5 border border-stone-200">
+              <Sparkles className="w-5 h-5" strokeWidth={1.5} />
             </div>
-            <h3 className="text-base font-serif font-medium text-stone-900">
-              Reflective Conversation with Gemini
+            <h3 className="text-base font-serif font-normal text-stone-900">
+              Reflection Companion
             </h3>
-            <p className="text-xs text-stone-500 mt-1 max-w-md mx-auto leading-relaxed">
-              Explore perspectives, discover recurring patterns, or brainstorm ideas. Your entries are protected by the AI Privacy Firewall.
+            <p className="text-xs text-stone-500 mt-1.5 max-w-md mx-auto leading-relaxed">
+              Explore deeper questions, synthesize themes across your entries, or discover new perspectives. Your memories are protected by the server-side Privacy Firewall.
             </p>
 
             {/* Quick Prompts */}
@@ -263,9 +332,9 @@ export const ReflectView: React.FC<ReflectViewProps> = ({
                   id={`preset-prompt-${idx}`}
                   onClick={() => handlePresetClick(preset)}
                   disabled={isGenerating}
-                  className="px-3 py-1.5 rounded-full bg-white border border-stone-200 text-stone-700 text-xs hover:border-stone-400 hover:bg-stone-50 transition-colors shadow-2xs"
+                  className="px-3.5 py-1.5 rounded-full bg-stone-50 border border-stone-200 text-stone-700 text-xs hover:border-stone-400 hover:bg-white transition-all shadow-2xs font-serif italic"
                 >
-                  {preset}
+                  "{preset}"
                 </button>
               ))}
             </div>
@@ -277,31 +346,43 @@ export const ReflectView: React.FC<ReflectViewProps> = ({
               id={`chat-message-${msg.id}`}
               className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
             >
-              <div className="flex items-center gap-2 mb-1 px-1">
-                <span className="text-[10px] font-mono uppercase text-stone-400">
-                  {msg.role === 'user' ? 'You' : 'Gemini Companion'}
+              <div className="flex items-center gap-2 mb-1.5 px-1">
+                <span className="text-[10px] font-mono uppercase tracking-wider text-stone-400">
+                  {msg.role === 'user'
+                    ? 'You'
+                    : msg.isFallback || msg.provider === 'local_fallback'
+                      ? 'Offline Local Fallback'
+                      : 'Gemini Reflection'}
                 </span>
                 {msg.modelUsed && (
-                  <span className="text-[9px] font-mono px-1.5 py-0.2 bg-stone-200/80 rounded text-stone-600">
-                    {msg.modelUsed}
+                  <span
+                    className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
+                      msg.isFallback || msg.provider === 'local_fallback'
+                        ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                        : 'bg-stone-200/70 text-stone-600'
+                    }`}
+                  >
+                    {msg.isFallback || msg.provider === 'local_fallback'
+                      ? '⚡ Degraded Mode (Offline Local Fallback)'
+                      : msg.modelUsed}
                   </span>
                 )}
-                <span className="text-[10px] text-stone-400">
+                <span className="text-[10px] text-stone-400 font-mono">
                   {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
               </div>
 
               <div
-                className={`max-w-2xl rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                className={`max-w-2xl rounded-2xl px-5 py-3.5 text-sm leading-relaxed ${
                   msg.role === 'user'
-                    ? 'bg-stone-900 text-stone-100 rounded-br-xs'
-                    : 'bg-white border border-stone-200 text-stone-800 rounded-bl-xs shadow-2xs font-serif'
+                    ? 'bg-[#121212] text-stone-100 rounded-br-xs shadow-2xs'
+                    : 'bg-white border border-stone-200 text-stone-800 rounded-bl-xs shadow-2xs'
                 }`}
               >
                 {msg.role === 'user' ? (
-                  <p className="whitespace-pre-wrap font-sans">{msg.content}</p>
+                  <p className="whitespace-pre-wrap font-sans text-xs sm:text-sm">{msg.content}</p>
                 ) : (
-                  <div className="markdown-body prose prose-stone prose-sm max-w-none">
+                  <div className="markdown-body text-[14px] sm:text-[15px]">
                     <ReactMarkdown>{msg.content}</ReactMarkdown>
                   </div>
                 )}
@@ -313,14 +394,14 @@ export const ReflectView: React.FC<ReflectViewProps> = ({
         {isGenerating && (
           <div className="flex items-center gap-2 text-xs text-stone-500 pl-2">
             <RefreshCw className="w-3.5 h-3.5 animate-spin text-stone-600" />
-            <span className="font-mono">Reflecting with Gemini... (Fallback ladder active)</span>
+            <span className="font-mono text-[11px]">Gemini is reflecting...</span>
           </div>
         )}
 
         {error && (
           <div
             id="chat-error-banner"
-            className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs flex items-center justify-between gap-2"
+            className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs flex items-center justify-between gap-2"
           >
             <div className="flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
@@ -347,9 +428,9 @@ export const ReflectView: React.FC<ReflectViewProps> = ({
             type="text"
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
-            placeholder="Ask Gemini to reflect, summarize, or brainstorm..."
+            placeholder="Ask a question or request a perspective..."
             disabled={isGenerating}
-            className="w-full pl-4 pr-12 py-3 text-xs sm:text-sm bg-transparent border-none outline-none text-stone-800 placeholder:text-stone-400"
+            className="w-full pl-4 pr-12 py-3 text-xs sm:text-sm bg-transparent border-none outline-none text-stone-800 placeholder:text-stone-400 font-serif"
           />
           <button
             id="btn-send-message"
@@ -358,7 +439,7 @@ export const ReflectView: React.FC<ReflectViewProps> = ({
             aria-label="Send reflection message"
             className={`absolute right-2 p-2 rounded-xl transition-all ${
               inputText.trim() && !isGenerating
-                ? 'bg-stone-900 text-stone-100 hover:bg-stone-800'
+                ? 'bg-[#121212] text-stone-100 hover:bg-stone-800 shadow-2xs'
                 : 'text-stone-300 cursor-not-allowed'
             }`}
           >

@@ -6,12 +6,17 @@ export interface ChatResponse {
   modelUsed: string;
   eligibleMemoriesUsedCount: number;
   scope: string;
+  isFallback?: boolean;
+  provider?: 'gemini' | 'local_fallback';
 }
 
 export interface ReflectionResponse {
   reflection: string;
   modelUsed: string;
   eligibleMemoriesCount: number;
+  note?: string;
+  isFallback?: boolean;
+  provider?: 'gemini' | 'local_fallback';
 }
 
 export interface ThemesResponse {
@@ -19,6 +24,9 @@ export interface ThemesResponse {
   modelUsed?: string;
   analyzedCount?: number;
   message?: string;
+  note?: string;
+  isFallback?: boolean;
+  provider?: 'gemini' | 'local_fallback';
 }
 
 /**
@@ -77,10 +85,11 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 
 export async function sendMessageToGemini(
   messages: ChatMessage[],
-  contextScope: PrivacyScope,
+  contextScope: PrivacyScope = 'all_vault',
   allMemories: JournalEntry[],
   activeEntry?: JournalEntry | null,
-  selectedMemoryIds: string[] = []
+  selectedMemoryIds: string[] = [],
+  selectedLabels: string[] = []
 ): Promise<ChatResponse> {
   // Reconcile allMemories with the authoritative activeEntry state
   // to ensure any background latency or un-fired snapshot cannot introduce stale data
@@ -100,21 +109,38 @@ export async function sendMessageToGemini(
   // Determine memory context based on selected PrivacyScope
   let memoriesToSend: JournalEntry[] = [];
 
-  if (contextScope === 'selected') {
+  if (contextScope === 'all_vault') {
+    // 1. ENTIRE ELIGIBLE VAULT (Default):
+    // Automatically includes ALL memories available to Gemini.
+    // Private memories are automatically excluded by filterEligibleMemories.
+    memoriesToSend = filterEligibleMemories(reconciledMemories);
+  } else if (contextScope === 'selected') {
+    // 2. SPECIFIC THOUGHTS:
+    // Only specifically chosen memories; private entries are strictly barred.
     memoriesToSend = reconciledMemories.filter(
       (m) => selectedMemoryIds.includes(m.id) && !isEntryClassifiedPrivate(m)
     );
-  } else if (contextScope === 'all_vault') {
-    memoriesToSend = filterEligibleMemories(reconciledMemories);
+  } else if (contextScope === 'by_label') {
+    // 3. BY LABEL:
+    // Only eligible memories matching selected labels; private entries strictly excluded.
+    memoriesToSend = reconciledMemories.filter((m) => {
+      if (isEntryClassifiedPrivate(m)) return false;
+      if (!selectedLabels || selectedLabels.length === 0) return false;
+      const entryTags = (m.tags || []).map((t) => t.toLowerCase().trim());
+      return selectedLabels.some((lbl) => entryTags.includes(lbl.toLowerCase().trim()));
+    });
+  } else if (contextScope === 'current') {
+    // 4. CURRENT THOUGHT ONLY:
+    // Gemini has zero access to past memories; only current draft is provided.
+    memoriesToSend = [];
   } else if (contextScope === 'date_range') {
-    // Last 30 days
+    // Backward compatibility: Last 30 days
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     memoriesToSend = filterEligibleMemories(reconciledMemories).filter(
       (m) => new Date(m.createdAt) >= thirtyDaysAgo
     );
   }
-  // If 'current', memoriesToSend remains empty []
 
   // Ensure activeEntry is NEVER duplicated in contextMemories
   if (activeEntry?.id) {
@@ -185,8 +211,10 @@ export async function sendMessageToGemini(
 export async function requestReflection(
   currentEntry: JournalEntry,
   allMemories: JournalEntry[],
-  contextScope: PrivacyScope,
-  focusArea: string = 'general'
+  contextScope: PrivacyScope = 'all_vault',
+  focusArea: string = 'general',
+  selectedMemoryIds: string[] = [],
+  selectedLabels: string[] = []
 ): Promise<ReflectionResponse> {
   if (isEntryClassifiedPrivate(currentEntry)) {
     throw new Error('This entry is classified as 🔒 Private. The AI Privacy Firewall strictly prohibits sending private entries to Gemini.');
@@ -195,6 +223,19 @@ export async function requestReflection(
   let memoriesToSend: JournalEntry[] = [];
   if (contextScope === 'all_vault') {
     memoriesToSend = filterEligibleMemories(allMemories);
+  } else if (contextScope === 'selected') {
+    memoriesToSend = allMemories.filter(
+      (m) => selectedMemoryIds.includes(m.id) && !isEntryClassifiedPrivate(m)
+    );
+  } else if (contextScope === 'by_label') {
+    memoriesToSend = allMemories.filter((m) => {
+      if (isEntryClassifiedPrivate(m)) return false;
+      if (!selectedLabels || selectedLabels.length === 0) return false;
+      const entryTags = (m.tags || []).map((t) => t.toLowerCase().trim());
+      return selectedLabels.some((lbl) => entryTags.includes(lbl.toLowerCase().trim()));
+    });
+  } else if (contextScope === 'current') {
+    memoriesToSend = [];
   } else if (contextScope === 'date_range') {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);

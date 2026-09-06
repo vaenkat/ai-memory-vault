@@ -1,4 +1,4 @@
-export type PrivacyScope = 'current' | 'selected' | 'date_range' | 'all_vault';
+export type PrivacyScope = 'all_vault' | 'selected' | 'by_label' | 'current' | 'date_range';
 
 export interface JournalEntry {
   id: string;
@@ -18,6 +18,8 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   modelUsed?: string;
+  isFallback?: boolean;
+  provider?: 'gemini' | 'local_fallback';
 }
 
 export interface Conversation {
@@ -27,6 +29,7 @@ export interface Conversation {
   title: string;
   contextScope: PrivacyScope;
   includedMemoryIds: string[];
+  includedLabels?: string[];
   messages: ChatMessage[];
   summary?: string;
   createdAt: string;
@@ -38,6 +41,7 @@ export interface ThemeInsight {
   description: string;
   evidence: string;
   relatedEntryIds: string[];
+  isFallback?: boolean;
 }
 
 export interface UserPreferences {

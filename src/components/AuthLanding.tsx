@@ -13,49 +13,49 @@ export const AuthLanding: React.FC<AuthLandingProps> = ({
   authError,
 }) => {
   return (
-    <div id="auth-landing-page" className="min-h-screen bg-stone-100/60 flex flex-col justify-between">
+    <div id="auth-landing-page" className="min-h-screen bg-[#fafaf8] flex flex-col justify-between selection:bg-stone-200">
       {/* Top Bar */}
-      <header className="max-w-5xl mx-auto w-full px-6 py-8 flex items-center justify-between">
+      <header className="max-w-4xl mx-auto w-full px-6 py-8 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-stone-900 text-stone-100 flex items-center justify-center font-serif text-lg font-semibold shadow-xs">
+          <div className="w-8 h-8 rounded-lg bg-[#121212] text-stone-100 flex items-center justify-center font-serif text-sm font-semibold shadow-2xs">
             G
           </div>
           <div>
-            <h1 className="text-base font-semibold text-stone-900 tracking-tight leading-none">
+            <h1 className="text-sm font-semibold text-stone-900 tracking-tight leading-none font-serif">
               Gemini Journal
             </h1>
-            <span className="text-xs text-stone-500 font-mono">
+            <span className="text-[10px] text-stone-400 font-mono tracking-wider uppercase mt-0.5 block">
               AI Memory Vault
             </span>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-200/80 px-3 py-1 rounded-full font-mono">
-          <Shield className="w-3.5 h-3.5" />
+        <div className="flex items-center gap-2 text-[11px] text-stone-600 bg-white border border-stone-200/90 px-3 py-1 rounded-full font-mono shadow-2xs">
+          <Shield className="w-3 h-3 text-emerald-700" />
           <span>Zero-Trust Architecture</span>
         </div>
       </header>
 
       {/* Main Hero & Sign-In Block */}
       <main className="max-w-xl mx-auto w-full px-6 py-12 text-center">
-        <span className="text-xs font-mono uppercase tracking-widest text-stone-500 mb-2 block">
-          Private Journaling · AI Memory Vault
+        <span className="text-[11px] font-mono uppercase tracking-widest text-stone-400 mb-3 block">
+          Private Journaling · Grounded AI Reflection
         </span>
         <h2 className="text-3xl sm:text-4xl font-serif text-stone-900 tracking-tight font-normal leading-tight">
           A quiet, private sanctuary for reflection, powered by Gemini.
         </h2>
-        <p className="mt-4 text-sm text-stone-600 leading-relaxed max-w-md mx-auto">
-          Write daily reflections, converse with an empathetic AI companion, and preserve life memories protected by an active AI Privacy Firewall.
+        <p className="mt-4 text-sm sm:text-base text-stone-600 leading-relaxed max-w-md mx-auto font-sans font-normal">
+          Capture daily reflections, discover life patterns with an empathetic AI companion, and preserve memories protected by an authoritative AI Privacy Firewall.
         </p>
 
         {/* Sign In Button Card */}
-        <div className="mt-8 p-6 rounded-2xl bg-white border border-stone-200/90 shadow-sm max-w-sm mx-auto">
+        <div className="mt-8 p-6 sm:p-7 rounded-2xl bg-white border border-stone-200/90 shadow-xs max-w-sm mx-auto">
           <button
             id="btn-google-sign-in"
             type="button"
             onClick={onSignIn}
             disabled={isLoading}
-            className="w-full py-3 px-4 rounded-xl border border-stone-300 hover:border-stone-400 bg-white hover:bg-stone-50 text-stone-800 text-xs sm:text-sm font-medium transition-all shadow-2xs flex items-center justify-center gap-3 focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:outline-none"
+            className="w-full py-3 px-4 rounded-xl border border-stone-300 hover:border-stone-400 bg-white hover:bg-stone-50 text-stone-800 text-xs sm:text-sm font-medium transition-all shadow-2xs flex items-center justify-center gap-3 focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:outline-none min-h-[44px]"
           >
             {/* Clean SVG Google logo */}
             <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
@@ -76,16 +76,16 @@ export const AuthLanding: React.FC<AuthLandingProps> = ({
                 d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
               />
             </svg>
-            <span>{isLoading ? 'Connecting securely...' : 'Sign in with Google'}</span>
+            <span>{isLoading ? 'Authenticating securely...' : 'Continue with Google'}</span>
           </button>
 
           {authError && (
-            <p className="mt-3 text-xs text-rose-600 leading-normal">
+            <p className="mt-3 text-xs text-rose-600 leading-normal font-sans">
               {authError}
             </p>
           )}
 
-          <div className="mt-4 pt-4 border-t border-stone-100 text-[11px] text-stone-500 flex items-center justify-center gap-1.5 font-mono">
+          <div className="mt-4 pt-4 border-t border-stone-100 text-[11px] text-stone-400 flex items-center justify-center gap-1.5 font-mono">
             <Lock className="w-3 h-3 text-stone-400" />
             <span>Firebase Federated Google Identity</span>
           </div>
@@ -93,41 +93,41 @@ export const AuthLanding: React.FC<AuthLandingProps> = ({
 
         {/* Security Assurances Grid */}
         <div className="mt-12 grid grid-cols-1 sm:grid-cols-3 gap-3 text-left">
-          <div className="p-3.5 rounded-xl border border-stone-200/80 bg-stone-50/80">
-            <div className="w-7 h-7 rounded-lg bg-white border border-stone-200 flex items-center justify-center text-stone-700 mb-2">
+          <div className="p-4 rounded-xl border border-stone-200/80 bg-white/70 shadow-2xs">
+            <div className="w-7 h-7 rounded-lg bg-emerald-50 border border-emerald-200/60 flex items-center justify-center text-emerald-700 mb-2.5">
               <Shield className="w-3.5 h-3.5" />
             </div>
-            <h3 className="text-xs font-semibold text-stone-900">AI Privacy Firewall</h3>
-            <p className="text-[11px] text-stone-600 mt-1 leading-normal">
-              Private entries are barred from Gemini by both client code and backend logic.
+            <h3 className="text-xs font-semibold text-stone-900 font-serif">AI Privacy Firewall</h3>
+            <p className="text-[11px] text-stone-500 mt-1 leading-relaxed font-sans">
+              Private entries are barred from Gemini by both client state and backend verification.
             </p>
           </div>
 
-          <div className="p-3.5 rounded-xl border border-stone-200/80 bg-stone-50/80">
-            <div className="w-7 h-7 rounded-lg bg-white border border-stone-200 flex items-center justify-center text-stone-700 mb-2">
+          <div className="p-4 rounded-xl border border-stone-200/80 bg-white/70 shadow-2xs">
+            <div className="w-7 h-7 rounded-lg bg-stone-100 border border-stone-200 flex items-center justify-center text-stone-700 mb-2.5">
               <Database className="w-3.5 h-3.5" />
             </div>
-            <h3 className="text-xs font-semibold text-stone-900">Database Isolation</h3>
-            <p className="text-[11px] text-stone-600 mt-1 leading-normal">
-              Firestore security rules restrict all read and write queries to your unique UID.
+            <h3 className="text-xs font-semibold text-stone-900 font-serif">Database Isolation</h3>
+            <p className="text-[11px] text-stone-500 mt-1 leading-relaxed font-sans">
+              Firestore security rules restrict all read and write queries strictly to your UID.
             </p>
           </div>
 
-          <div className="p-3.5 rounded-xl border border-stone-200/80 bg-stone-50/80">
-            <div className="w-7 h-7 rounded-lg bg-white border border-stone-200 flex items-center justify-center text-stone-700 mb-2">
+          <div className="p-4 rounded-xl border border-stone-200/80 bg-white/70 shadow-2xs">
+            <div className="w-7 h-7 rounded-lg bg-stone-100 border border-stone-200 flex items-center justify-center text-stone-700 mb-2.5">
               <Sparkles className="w-3.5 h-3.5" />
             </div>
-            <h3 className="text-xs font-semibold text-stone-900">Model Resilience</h3>
-            <p className="text-[11px] text-stone-600 mt-1 leading-normal">
-              Automated 4-model fallback ladder with zero API keys exposed in the browser.
+            <h3 className="text-xs font-semibold text-stone-900 font-serif">Model Resilience</h3>
+            <p className="text-[11px] text-stone-500 mt-1 leading-relaxed font-sans">
+              Automated 4-model fallback ladder with zero API credentials exposed in the browser.
             </p>
           </div>
         </div>
       </main>
 
       {/* Footer */}
-      <footer className="max-w-5xl mx-auto w-full px-6 py-6 text-center text-xs text-stone-400 border-t border-stone-200">
-        Personal Gemini Journal · AI Memory Vault · Production Ideathon Architecture
+      <footer className="max-w-4xl mx-auto w-full px-6 py-6 text-center text-xs text-stone-400 border-t border-stone-200/80 font-mono">
+        Personal Gemini Journal · AI Memory Vault · Production Architecture
       </footer>
     </div>
   );

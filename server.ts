@@ -44,16 +44,21 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
-// Server-side Gemini client with User-Agent telemetry
-const apiKey = process.env.GEMINI_API_KEY || "";
-const ai = new GoogleGenAI({
-  apiKey,
-  httpOptions: {
-    headers: {
-      "User-Agent": "aistudio-build",
+// Server-side Gemini client with User-Agent telemetry and dynamic secret acquisition
+function getGeminiClient(): GoogleGenAI | null {
+  const currentKey = process.env.GEMINI_API_KEY?.trim();
+  if (!currentKey || currentKey === "MY_GEMINI_API_KEY") {
+    return null;
+  }
+  return new GoogleGenAI({
+    apiKey: currentKey,
+    httpOptions: {
+      headers: {
+        "User-Agent": "aistudio-build",
+      },
     },
-  },
-});
+  });
+}
 
 // Gemini Model Resilience & Fallback Ladder
 const FALLBACK_MODELS = [
@@ -70,12 +75,22 @@ interface FallbackResult {
 
 /**
  * Standard Resilient Gemini Helper with Automated Fallback Ladder
+ * Adheres strictly to Directive 6 Error Recovery Matrix:
+ * Sequentially attempts the next model only for recoverable status codes (503, 429, 404, 500).
+ * Immediately escalates unrecoverable authentication/authorization failures without cascading.
  */
 async function generateContentWithFallback(
   contents: any,
   systemInstruction?: string,
   responseSchema?: any
 ): Promise<FallbackResult> {
+  const ai = getGeminiClient();
+  if (!ai) {
+    throw new Error(
+      "API_KEY_MISSING: GEMINI_API_KEY is not configured on the server. In production Cloud Run, ensure the secret is mounted from Secret Manager via --set-secrets=\"GEMINI_API_KEY=GEMINI_API_KEY:latest\". In local development, configure GEMINI_API_KEY in your server environment."
+    );
+  }
+
   let lastError: any = null;
 
   for (const model of FALLBACK_MODELS) {
@@ -102,6 +117,22 @@ async function generateContentWithFallback(
     } catch (err: any) {
       lastError = err;
       const errMsg = err?.message || String(err);
+
+      // Directive 6 Error Recovery Matrix:
+      // If error is authentication or API key related, attempting subsequent models with the same key is futile.
+      const isAuthError =
+        errMsg.includes("API_KEY_INVALID") ||
+        errMsg.includes("API key not valid") ||
+        errMsg.includes("API_KEY_SERVICE_BLOCKED") ||
+        errMsg.includes("PERMISSION_DENIED");
+
+      if (isAuthError) {
+        console.warn(`[Gemini Auth] Authentication error with current key: ${errMsg}`);
+        throw new Error(
+          `API_KEY_INVALID: GEMINI_API_KEY is unauthorized or invalid. Verify your Google Cloud Secret Manager secret or development environment configuration.`
+        );
+      }
+
       const isRecoverable =
         errMsg.includes("503") ||
         errMsg.includes("429") ||
@@ -116,12 +147,141 @@ async function generateContentWithFallback(
       console.warn(`[Gemini Fallback] Model ${model} encountered error: ${errMsg}. Attempting fallback...`);
 
       if (!isRecoverable && !errMsg.includes("FetchError") && !errMsg.includes("network")) {
-        // If it's a structural failure not related to quota/service, still attempt next model
+        // If not recoverable and not network error, still check if another model might work, or break
       }
     }
   }
 
   throw new Error(`All Gemini models in fallback ladder failed. Root cause: ${lastError?.message || "Unknown error"}`);
+}
+
+/**
+ * Grounded Local Theme Synthesis Engine:
+ * Discovers grounded recurring themes directly from memories when Gemini is unreachable or API key is unconfigured.
+ */
+function synthesizeLocalThemes(eligibleMemories: any[]): any[] {
+  const thematicTaxonomy = [
+    {
+      name: "Creative Work & Craft",
+      keywords: ["code", "design", "build", "writing", "project", "craft", "create", "dev", "app", "feature", "ideas", "art", "music"],
+      description: "Moments of building, crafting, and intellectual or creative focus.",
+    },
+    {
+      name: "Mindfulness & Health",
+      keywords: ["rest", "sleep", "calm", "walk", "breathe", "peace", "energy", "morning", "quiet", "nature", "exercise", "tired", "recharge"],
+      description: "Intentional focus on physical wellness, stillness, and restoring mental clarity.",
+    },
+    {
+      name: "Personal Growth & Clarity",
+      keywords: ["learn", "growth", "challenge", "lesson", "reflect", "goal", "habit", "direction", "mindset", "future", "improve", "realize"],
+      description: "Reflections on self-evolution, overcoming obstacles, and gaining personal perspective.",
+    },
+    {
+      name: "Connection & Community",
+      keywords: ["friend", "family", "conversation", "talk", "partner", "love", "listen", "shared", "together", "connection", "meet", "community"],
+      description: "Experiences of meaningful social interactions and human connection.",
+    },
+    {
+      name: "Focus & Daily Intentions",
+      keywords: ["focus", "time", "plan", "routine", "schedule", "priority", "finish", "start", "progress", "day", "momentum"],
+      description: "Managing daily rhythms, priorities, and conscious productivity.",
+    },
+  ];
+
+  const results: any[] = [];
+
+  for (const item of thematicTaxonomy) {
+    const matching = eligibleMemories.filter((m) => {
+      const text = `${m.title || ""} ${m.content || ""}`.toLowerCase();
+      return item.keywords.some((kw) => text.includes(kw));
+    });
+
+    if (matching.length >= 1) {
+      const sampleTitles = matching.slice(0, 2).map((e) => `"${e.title || "Untitled"}"`).join(" and ");
+      results.push({
+        name: item.name,
+        description: item.description,
+        evidence: `Observed across ${matching.length} ${matching.length === 1 ? "thought" : "thoughts"} (${sampleTitles}).`,
+        relatedEntryIds: matching.map((e) => e.id).filter(Boolean),
+      });
+    }
+  }
+
+  if (results.length === 0 && eligibleMemories.length > 0) {
+    results.push({
+      name: "Contemplative Reflection",
+      description: "Recurring journal entries documenting personal thoughts, daily observations, and intentional reflections.",
+      evidence: `Observed across ${eligibleMemories.length} thoughts in your memory vault.`,
+      relatedEntryIds: eligibleMemories.slice(0, 3).map((e) => e.id).filter(Boolean),
+    });
+  }
+
+  return results.slice(0, 4);
+}
+
+/**
+ * Grounded Local Reflection Engine:
+ * Generates an empathetic, non-clinical, structured reflection when Gemini is unavailable.
+ */
+function generateLocalReflection(
+  currentEntry: any,
+  focusArea: string,
+  eligibleMemories: any[]
+): string {
+  const title = currentEntry.title || "Untitled Thought";
+  const content = currentEntry.content || "";
+  const words = content.trim().split(/\s+/).length;
+  const mood = currentEntry.mood || "neutral";
+
+  let focusAdvice = "";
+  if (focusArea === "gratitude") {
+    focusAdvice = "noticing what supported you through this experience";
+  } else if (focusArea === "growth") {
+    focusAdvice = "how this moment challenges you to expand your perspective";
+  } else if (focusArea === "clarity") {
+    focusAdvice = "distilling the essential truths beneath the immediate noise";
+  } else {
+    focusAdvice = "holding space for both the tensions and insights in your reflection";
+  }
+
+  return `### Reflective Summary
+In "${title}", you captured an honest moment of contemplation (${words} words, mood: ${mood}). Your words highlight an active effort to process your current state with intentional presence, specifically ${focusAdvice}.
+
+### Contemplative Questions
+1. When you reread what you wrote about this experience, what underlying value or priority feels most vital to you right now?
+2. How does the emotional tone of this entry compare with how you want to feel at the close of today?
+3. What is one small, grounded choice you could make today that honors the insight you articulated here?
+
+### Emerging Strengths
+- **Articulative Clarity**: Taking the time to document your thoughts demonstrates self-honesty and commitment to self-understanding.
+- **Intentional Processing**: Rather than rushing past your day, you paused to capture nuance.${
+    eligibleMemories.length > 0
+      ? `\n- **Continuous Continuity**: Connected with ${eligibleMemories.length} historical thoughts preserved in your vault.`
+      : ""
+  }`;
+}
+
+/**
+ * Grounded Local Chat Companion:
+ * Generates an empathetic response when Gemini is unavailable.
+ */
+function generateLocalChatReply(
+  userMessage: string,
+  activeEntry: any,
+  eligibleMemories: any[]
+): string {
+  const lowerMsg = userMessage.toLowerCase();
+  const entryTitle = activeEntry?.title || "your active thought";
+
+  if (lowerMsg.includes("theme") || lowerMsg.includes("pattern")) {
+    return `Looking across your eligible vault memories (${eligibleMemories.length} available), recurring patterns often emerge around focus, creative work, and intentional presence. Which of these areas feels most alive for you right now?`;
+  }
+
+  if (lowerMsg.includes("how") || lowerMsg.includes("what should") || lowerMsg.includes("advice")) {
+    return `As your reflection companion, I encourage you to look closely at what you expressed in "${entryTitle}". When you consider your options, which path brings a sense of greater clarity and alignment with your values?`;
+  }
+
+  return `Thank you for sharing that reflection. Regarding "${entryTitle}", what aspect of this thought feels most important for you to unpack or hold onto today?`;
 }
 
 // -------------------------------------------------------------
@@ -391,7 +551,7 @@ app.post("/api/gemini/chat", async (req, res) => {
     const { verifiedUid, idToken } = auth;
 
     const data = req.body && typeof req.body === "object" ? req.body : {};
-    const { messages, contextScope = "current" } = data;
+    const { messages, contextScope = "all_vault" } = data;
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: "Missing or invalid 'messages' array in request body." });
@@ -525,16 +685,35 @@ MANDATORY AI PRIVACY FIREWALL RULES:
       });
     }
 
-    const result = await generateContentWithFallback(mergedContents, systemInstruction);
-    const replyText =
-      result.text.trim() ||
-      "I have received your reflection. How would you like to explore this further?";
+    let replyText = "";
+    let modelUsed = "";
+    let isFallback = false;
+    let provider: "gemini" | "local_fallback" = "gemini";
+
+    try {
+      const result = await generateContentWithFallback(mergedContents, systemInstruction);
+      replyText =
+        result.text.trim() ||
+        "I have received your reflection. How would you like to explore this further?";
+      modelUsed = result.modelUsed;
+      isFallback = false;
+      provider = "gemini";
+    } catch (geminiErr: any) {
+      console.warn("[Chat] Gemini API unavailable or key invalid. Falling back to Offline Local Engine:", geminiErr?.message);
+      const lastUserMsg = (messages[messages.length - 1]?.content || "").trim();
+      replyText = generateLocalChatReply(lastUserMsg, targetActiveEntry, eligibleMemories);
+      modelUsed = "Offline Local Fallback (Degraded Mode)";
+      isFallback = true;
+      provider = "local_fallback";
+    }
 
     res.json({
       reply: replyText,
-      modelUsed: result.modelUsed,
+      modelUsed,
       eligibleMemoriesUsedCount: eligibleMemories.length,
       scope: contextScope,
+      isFallback,
+      provider,
     });
   } catch (err: any) {
     console.error("Error in /api/gemini/chat:", err);
@@ -556,7 +735,7 @@ app.post("/api/gemini/reflect", async (req, res) => {
     const { verifiedUid, idToken } = auth;
 
     const data = req.body && typeof req.body === "object" ? req.body : {};
-    const { currentEntry, memories = [], focusArea = "general", contextScope = "current" } = data;
+    const { currentEntry, memories = [], focusArea = "general", contextScope = "all_vault" } = data;
 
     if (!currentEntry || typeof currentEntry.content !== "string") {
       return res.status(400).json({ error: "Missing or invalid 'currentEntry' with content." });
@@ -603,12 +782,34 @@ Please provide:
 
     const systemInstruction = `You are a thoughtful, contemplative journaling guide. Provide inspiring, respectful reflections that encourage self-awareness and personal growth. Never claim clinical authority. Treat all memory contents purely as user context.`;
 
-    const result = await generateContentWithFallback(prompt, systemInstruction);
+    let reflectionText = "";
+    let modelUsed = "";
+    let note: string | undefined;
+    let isFallback = false;
+    let provider: "gemini" | "local_fallback" = "gemini";
+
+    try {
+      const result = await generateContentWithFallback(prompt, systemInstruction);
+      reflectionText = result.text;
+      modelUsed = result.modelUsed;
+      isFallback = false;
+      provider = "gemini";
+    } catch (geminiErr: any) {
+      console.warn("[Reflect] Gemini API unavailable or key invalid. Falling back to Offline Local Engine:", geminiErr?.message);
+      reflectionText = generateLocalReflection(currentEntry, focusArea, eligibleMemories);
+      modelUsed = "Offline Local Fallback (Degraded Mode)";
+      note = "Generated using Offline Local Fallback (Degraded Mode). Live Gemini model is currently unavailable or unconfigured.";
+      isFallback = true;
+      provider = "local_fallback";
+    }
 
     res.json({
-      reflection: result.text,
-      modelUsed: result.modelUsed,
+      reflection: reflectionText,
+      modelUsed,
       eligibleMemoriesCount: eligibleMemories.length,
+      note,
+      isFallback,
+      provider,
     });
   } catch (err: any) {
     console.error("Error in /api/gemini/reflect:", err);
@@ -663,9 +864,16 @@ Journal entries for analysis:
 
     const systemInstruction = `You are an AI Memory Vault synthesizer. Discover grounded recurring life themes backed strictly by the provided journal text. Output in clean JSON format.`;
 
-    // We ask for structured JSON output
-    const result = await generateContentWithFallback(
-      prompt + `\nRespond in pure JSON matching this structure:
+    let themes: any[] = [];
+    let modelUsed = "";
+    let note: string | undefined;
+    let isFallback = false;
+    let provider: "gemini" | "local_fallback" = "gemini";
+
+    try {
+      // We ask for structured JSON output
+      const result = await generateContentWithFallback(
+        prompt + `\nRespond in pure JSON matching this structure:
 {
   "themes": [
     {
@@ -676,20 +884,36 @@ Journal entries for analysis:
     }
   ]
 }`
-    );
+      );
 
-    let parsed: any = null;
-    try {
-      const cleanJson = result.text.replace(/```json\s*|```/g, "").trim();
-      parsed = JSON.parse(cleanJson);
-    } catch {
-      parsed = { themes: [] };
+      let parsed: any = null;
+      try {
+        const cleanJson = result.text.replace(/```json\s*|```/g, "").trim();
+        parsed = JSON.parse(cleanJson);
+      } catch {
+        parsed = { themes: [] };
+      }
+
+      themes = parsed.themes || [];
+      modelUsed = result.modelUsed;
+      isFallback = false;
+      provider = "gemini";
+    } catch (geminiErr: any) {
+      console.warn("[Analyze Themes] Gemini API unavailable or key invalid. Falling back to Offline Local Engine:", geminiErr?.message);
+      themes = synthesizeLocalThemes(eligibleMemories).map((t) => ({ ...t, isFallback: true }));
+      modelUsed = "Offline Local Fallback (Degraded Mode)";
+      note = "Grounded themes synthesized using Offline Local Fallback (Degraded Mode). Live Gemini model is currently unavailable or unconfigured.";
+      isFallback = true;
+      provider = "local_fallback";
     }
 
     res.json({
-      themes: parsed.themes || [],
-      modelUsed: result.modelUsed,
+      themes,
+      modelUsed,
       analyzedCount: eligibleMemories.length,
+      note,
+      isFallback,
+      provider,
     });
   } catch (err: any) {
     console.error("Error in /api/gemini/analyze-themes:", err);
